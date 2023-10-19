@@ -7,6 +7,7 @@ import type { Mutex } from "../mutex";
 import * as Current from "./2_1";
 import * as Previous from "./2_0";
 import type { WasmInstance } from "./wasm_loader";
+import { type VertexAttribute, type Texture_2_0, type Texture_2_1, Child_2_1 } from "@novorender/wasm-parser";
 
 const { MaterialType, OptionalVertexAttribute, PrimitiveType, TextureSemantic } = Current;
 type Current = typeof Current;
@@ -128,7 +129,7 @@ export interface NodeSubMesh {
     readonly drawRanges: readonly MeshDrawRange[];
     readonly vertexBuffers: readonly ArrayBuffer[];
     readonly indices: Uint16Array | Uint32Array | number; // Index buffer, or # vertices of none
-    readonly baseColorTexture: number | undefined; // texture index
+    readonly baseColorTexture?: number; // texture index
 }
 
 /** @internal */
@@ -356,7 +357,7 @@ export function* getSubMeshes(schema: Schema, predicate?: (objectId: number) => 
 type TypedArray = Uint8Array | Uint16Array | Uint32Array | Int8Array | Int16Array | Int32Array | Float32Array | Float64Array;
 
 // Candidates for wasm implementation?
-function copyToInterleavedArray<T extends TypedArray>(wasm: WasmInstance, dst: T, src: T, byteOffset: number, byteStride: number, begin: number, end: number) {
+function copyToInterleavedArray<T extends TypedArray>(dst: T, src: T, byteOffset: number, byteStride: number, begin: number, end: number) {
     const offset = byteOffset / dst.BYTES_PER_ELEMENT;
     const stride = byteStride / dst.BYTES_PER_ELEMENT;
     console.assert(Math.round(offset) == offset);
@@ -368,7 +369,7 @@ function copyToInterleavedArray<T extends TypedArray>(wasm: WasmInstance, dst: T
     }
 }
 
-function fillToInterleavedArray<T extends TypedArray>(wasm: WasmInstance, dst: T, src: number, byteOffset: number, byteStride: number, begin: number, end: number) {
+function fillToInterleavedArray<T extends TypedArray>(dst: T, src: number, byteOffset: number, byteStride: number, begin: number, end: number) {
     const offset = byteOffset / dst.BYTES_PER_ELEMENT;
     const stride = byteStride / dst.BYTES_PER_ELEMENT;
     console.assert(Math.round(offset) == offset);
@@ -380,7 +381,7 @@ function fillToInterleavedArray<T extends TypedArray>(wasm: WasmInstance, dst: T
     }
 }
 
-function getGeometry(wasm: WasmInstance, schema: Schema, separatePositionBuffer: boolean, enableOutlines: boolean, highlights: Highlights, predicate?: (objectId: number) => boolean): NodeGeometry {
+function getGeometry(schema: Schema, separatePositionBuffer: boolean, enableOutlines: boolean, highlights: Highlights, predicate?: (objectId: number) => boolean): NodeGeometry {
     const { vertex, vertexIndex } = schema;
 
     const filteredSubMeshes = [...getSubMeshes(schema, predicate)];
@@ -516,10 +517,10 @@ function getGeometry(wasm: WasmInstance, schema: Schema, separatePositionBuffer:
                             if (components) {
                                 src = Reflect.get(src, components[c]);
                             }
-                            copyToInterleavedArray(wasm, dst, src, offs, vertexStride, beginVtx, endVtx);
+                            copyToInterleavedArray(dst, src, offs, vertexStride, beginVtx, endVtx);
                         } else {
                             const src = Reflect.get(context, attribName) as number;
-                            fillToInterleavedArray(wasm, dst, src, offs, vertexStride, beginVtx, endVtx);
+                            fillToInterleavedArray(dst, src, offs, vertexStride, beginVtx, endVtx);
                         }
                     }
                 }
@@ -553,9 +554,9 @@ function getGeometry(wasm: WasmInstance, schema: Schema, separatePositionBuffer:
                 if (positionBuffer) {
                     // initialize separate positions buffer
                     const i16 = new Int16Array(positionBuffer, vertexOffset * positionStride);
-                    copyToInterleavedArray(wasm, i16, vertex.position.x, 0, positionStride, beginVtx, endVtx);
-                    copyToInterleavedArray(wasm, i16, vertex.position.y, 2, positionStride, beginVtx, endVtx);
-                    copyToInterleavedArray(wasm, i16, vertex.position.z, 4, positionStride, beginVtx, endVtx);
+                    copyToInterleavedArray(i16, vertex.position.x, 0, positionStride, beginVtx, endVtx);
+                    copyToInterleavedArray(i16, vertex.position.y, 2, positionStride, beginVtx, endVtx);
+                    copyToInterleavedArray(i16, vertex.position.z, 4, positionStride, beginVtx, endVtx);
                 }
 
                 // initialize index buffer (if any)
@@ -670,7 +671,142 @@ function getGeometry(wasm: WasmInstance, schema: Schema, separatePositionBuffer:
     return { subMeshes, textures } as const satisfies NodeGeometry;
 }
 
-export function parseNode(wasm: WasmInstance, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
+
+// wasm implementation
+export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
+    const data = new Uint8Array(buffer, 0);
+
+    const schema = version == Current.version ? wasm.Schema.parse_2_1(data) : wasm.Schema.parse_2_0(data) ;
+    const childInfos = schema.children().map(value => {
+        let childInfo = {
+            id: value.id(),
+            childIndex: value.child_index,
+            childMask: value.child_mask,
+            tolerance: value.tolerance,
+            byteSize: value.byte_size,
+            offset: vec3.fromValues(
+                value.offset.x,
+                value.offset.y,
+                value.offset.z
+            ),
+            scale: value.scale,
+            bounds: {
+                box: {
+                    min: vec3.fromValues(
+                        value.bounds._box.min.x,
+                        value.bounds._box.min.y,
+                        value.bounds._box.min.z,
+                    ),
+                    max: vec3.fromValues(
+                        value.bounds._box.max.x,
+                        value.bounds._box.max.y,
+                        value.bounds._box.max.z,
+                    ),
+                },
+                sphere: {
+                    center: vec3.fromValues(
+                        value.bounds.sphere.origo.x,
+                        value.bounds.sphere.origo.y,
+                        value.bounds.sphere.origo.z,
+                    ),
+                    radius: value.bounds.sphere.radius,
+                }
+            },
+            primitives: value.primitives,
+            primitivesDelta: value.primitives_delta,
+            gpuBytes: value.gpu_bytes
+        };
+        if(value instanceof Child_2_1) {
+            if (value.descendant_object_ids() !== null) {
+                console.log(value.descendant_object_ids());
+                (childInfo as any).descendantObjectIds = value.descendant_object_ids().slice()
+            }
+        }
+        return childInfo;
+    });
+
+    let {subMeshes, textures}  = schema.geometry(enableOutlines);
+    function vertexAttributeToJS(vertex_attr: VertexAttribute | undefined) {
+        if(vertex_attr === undefined) {
+            return null;
+        }
+
+        return {
+            kind: vertex_attr.kind,
+            buffer: vertex_attr.buffer,
+            componentCount: vertex_attr.componentCount,
+            componentType: vertex_attr.componentType,
+            normalized: vertex_attr.normalized,
+            byteOffset: vertex_attr.byteOffset,
+            byteStride: vertex_attr.byteStride,
+        }
+    }
+
+    const jsSubMeshes: NodeSubMesh[] = subMeshes.map(subMesh => {
+        const vertexAttributesWasm = subMesh.vertexAttributes;
+        const vertexAtributesJs: VertexAttributes = {
+            position: vertexAttributeToJS(vertexAttributesWasm.position)!,
+            normal: vertexAttributeToJS(vertexAttributesWasm.normal),
+            material: vertexAttributeToJS(vertexAttributesWasm.material),
+            objectId: vertexAttributeToJS(vertexAttributesWasm.object_id),
+            texCoord: vertexAttributeToJS(vertexAttributesWasm.tex_coord),
+            color: vertexAttributeToJS(vertexAttributesWasm.color),
+            projectedPos: vertexAttributeToJS(vertexAttributesWasm.projected_pos),
+            deviations: vertexAttributeToJS(vertexAttributesWasm.deviations),
+            triangles0: vertexAttributeToJS(vertexAttributesWasm.triangles0),
+            triangles1: vertexAttributeToJS(vertexAttributesWasm.triangles1),
+            triangles2: vertexAttributeToJS(vertexAttributesWasm.triangles2),
+            trianglesObjId: vertexAttributeToJS(vertexAttributesWasm.triangles_obj_id),
+            highlight: vertexAttributeToJS(vertexAttributesWasm.highlight),
+            highlightTri: vertexAttributeToJS(vertexAttributesWasm.highlight_tri),
+        };
+        return {
+            materialType: subMesh.materialType,
+            primitiveType: subMesh.primitiveType,
+            numVertices: subMesh.numVertices,
+            numTriangles: subMesh.numTriangles,
+            objectRanges: subMesh.objectRanges.map(range => ({
+                objectId: range.objectId,
+                beginVertex: range.beginVertex,
+                endVertex: range.endVertex,
+                beginTriangle: range.beginTriangle,
+                endTriangle: range.endTriangle
+            })),
+            vertexAttributes: vertexAtributesJs,
+            vertexBuffers: subMesh.vertexBuffers,
+            indices: subMesh.indices,
+            baseColorTexture: subMesh.baseColorTexture,
+            drawRanges: subMesh.drawRanges.map(range => ({
+                childIndex: range.childIndex,
+                byteOffset: range.byteOffset,
+                first: range.first,
+                count: range.count
+            })),
+        };
+    });
+
+    const jsTextures: NodeTexture[] = textures.map((texture: Texture_2_0 | Texture_2_1) => ({
+        semantic: texture.semantic,
+        transform: [
+            texture.transform.e00,
+            texture.transform.e01,
+            texture.transform.e02,
+            texture.transform.e10,
+            texture.transform.e11,
+            texture.transform.e12,
+            texture.transform.e20,
+            texture.transform.e21,
+            texture.transform.e22,
+        ],
+        params: texture.params
+    }));
+    const geometry = {subMeshes: jsSubMeshes, textures: jsTextures};
+
+    return { childInfos, geometry } as const;
+}
+
+// Js implementation
+export function parseNodeJs(id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
     console.assert(isSupportedVersion(version));
     const r = new BufferReader(buffer);
     var schema = version == Current.version ? Current.readSchema(r) : Previous.readSchema(r);
@@ -679,6 +815,44 @@ export function parseNode(wasm: WasmInstance, id: string, separatePositionBuffer
         highlights.indices[objectId] != 0xff
     ) : undefined;
     const childInfos = getChildren(id, schema, separatePositionBuffer, predicate);
-    const geometry = getGeometry(wasm, schema, separatePositionBuffer, enableOutlines, highlights, predicate);
+    const geometry = getGeometry(schema, separatePositionBuffer, enableOutlines, highlights, predicate);
     return { childInfos, geometry } as const;
+}
+
+// Temporary function to test both JS and wasm versions
+export function parseNode(wasm: WasmInstance, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
+    enum Mode {
+        Wasm,
+        Js,
+        ComparePerformance
+    }
+
+    function fnmode(): Mode {
+        return Mode.Wasm
+    }
+    const mode: Mode = fnmode();
+
+    // Test wasm implementation
+    switch (mode) {
+        case Mode.Wasm:
+            return parseNodeWasm(wasm, id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
+        case Mode.Js:
+            return parseNodeJs(id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
+        case Mode.ComparePerformance:
+            let childInfosJs;
+            let geometryJs;
+            {
+                const {childInfos, geometry} = parseNodeJs(id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
+                childInfosJs = childInfos;
+                geometryJs = geometry;
+            }
+            let childInfosWasm;
+            let geometryWasm;
+            {
+                const {childInfos, geometry} = parseNodeWasm(wasm, id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
+                childInfosWasm = childInfos;
+                geometryWasm = geometry;
+            }
+            return {childInfos: childInfosWasm, geometry: geometryWasm};
+    }
 }
