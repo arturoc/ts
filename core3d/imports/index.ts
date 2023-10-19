@@ -153,8 +153,6 @@ async function getArrayBuffer(arg: string | URL | ArrayBuffer, baseUrl?: string 
         throw new Error(`Could not download wasm instance from: ${url}`);
     }
     return await response.arrayBuffer();
-    // const { instance } = await WebAssembly.instantiateStreaming(response);
-    // return instance.exports as unknown as WasmInstance;
 }
 
 function getWorker(arg: string | URL | Worker, baseUrl?: string | URL) {
