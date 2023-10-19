@@ -677,130 +677,28 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
     const data = new Uint8Array(buffer, 0);
 
     const schema = version == Current.version ? wasm.Schema.parse_2_1(data) : wasm.Schema.parse_2_0(data) ;
-    const childInfos = schema.children().map(value => {
-        let childInfo = {
-            id: value.id(),
-            childIndex: value.child_index,
-            childMask: value.child_mask,
-            tolerance: value.tolerance,
-            byteSize: value.byte_size,
-            offset: vec3.fromValues(
-                value.offset.x,
-                value.offset.y,
-                value.offset.z
-            ),
-            scale: value.scale,
-            bounds: {
-                box: {
-                    min: vec3.fromValues(
-                        value.bounds._box.min.x,
-                        value.bounds._box.min.y,
-                        value.bounds._box.min.z,
-                    ),
-                    max: vec3.fromValues(
-                        value.bounds._box.max.x,
-                        value.bounds._box.max.y,
-                        value.bounds._box.max.z,
-                    ),
-                },
-                sphere: {
-                    center: vec3.fromValues(
-                        value.bounds.sphere.origo.x,
-                        value.bounds.sphere.origo.y,
-                        value.bounds.sphere.origo.z,
-                    ),
-                    radius: value.bounds.sphere.radius,
-                }
-            },
-            primitives: value.primitives,
-            primitivesDelta: value.primitives_delta,
-            gpuBytes: value.gpu_bytes
-        };
-        if(value instanceof Child_2_1) {
-            if (value.descendant_object_ids() !== null) {
-                console.log(value.descendant_object_ids());
-                (childInfo as any).descendantObjectIds = value.descendant_object_ids().slice()
-            }
-        }
-        return childInfo;
-    });
+
+    let childInfos = schema.children();
+
 
     let {subMeshes, textures}  = schema.geometry(enableOutlines);
-    function vertexAttributeToJS(vertex_attr: VertexAttribute | undefined) {
-        if(vertex_attr === undefined) {
-            return null;
+    for(let subMesh of subMeshes) {
+        if (subMesh.indices instanceof Uint8Array) {
+            if (subMesh.numVertices > 0xFFFF) {
+                subMesh.indices = new Uint32Array(subMesh.indices.buffer)
+            }else{
+                subMesh.indices = new Uint16Array(subMesh.indices.buffer)
+            }
         }
-
-        return {
-            kind: vertex_attr.kind,
-            buffer: vertex_attr.buffer,
-            componentCount: vertex_attr.componentCount,
-            componentType: vertex_attr.componentType,
-            normalized: vertex_attr.normalized,
-            byteOffset: vertex_attr.byteOffset,
-            byteStride: vertex_attr.byteStride,
-        }
+        subMesh.vertexBuffers = subMesh.vertexBuffers.map(buffer => {
+            if (buffer instanceof Uint8Array) {
+                return buffer.buffer;
+            }else{
+                return buffer
+            }
+        })
     }
-
-    const jsSubMeshes: NodeSubMesh[] = subMeshes.map(subMesh => {
-        const vertexAttributesWasm = subMesh.vertexAttributes;
-        const vertexAtributesJs: VertexAttributes = {
-            position: vertexAttributeToJS(vertexAttributesWasm.position)!,
-            normal: vertexAttributeToJS(vertexAttributesWasm.normal),
-            material: vertexAttributeToJS(vertexAttributesWasm.material),
-            objectId: vertexAttributeToJS(vertexAttributesWasm.object_id),
-            texCoord: vertexAttributeToJS(vertexAttributesWasm.tex_coord),
-            color: vertexAttributeToJS(vertexAttributesWasm.color),
-            projectedPos: vertexAttributeToJS(vertexAttributesWasm.projected_pos),
-            deviations: vertexAttributeToJS(vertexAttributesWasm.deviations),
-            triangles0: vertexAttributeToJS(vertexAttributesWasm.triangles0),
-            triangles1: vertexAttributeToJS(vertexAttributesWasm.triangles1),
-            triangles2: vertexAttributeToJS(vertexAttributesWasm.triangles2),
-            trianglesObjId: vertexAttributeToJS(vertexAttributesWasm.triangles_obj_id),
-            highlight: vertexAttributeToJS(vertexAttributesWasm.highlight),
-            highlightTri: vertexAttributeToJS(vertexAttributesWasm.highlight_tri),
-        };
-        return {
-            materialType: subMesh.materialType,
-            primitiveType: subMesh.primitiveType,
-            numVertices: subMesh.numVertices,
-            numTriangles: subMesh.numTriangles,
-            objectRanges: subMesh.objectRanges.map(range => ({
-                objectId: range.objectId,
-                beginVertex: range.beginVertex,
-                endVertex: range.endVertex,
-                beginTriangle: range.beginTriangle,
-                endTriangle: range.endTriangle
-            })),
-            vertexAttributes: vertexAtributesJs,
-            vertexBuffers: subMesh.vertexBuffers,
-            indices: subMesh.indices,
-            baseColorTexture: subMesh.baseColorTexture,
-            drawRanges: subMesh.drawRanges.map(range => ({
-                childIndex: range.childIndex,
-                byteOffset: range.byteOffset,
-                first: range.first,
-                count: range.count
-            })),
-        };
-    });
-
-    const jsTextures: NodeTexture[] = textures.map((texture: Texture_2_0 | Texture_2_1) => ({
-        semantic: texture.semantic,
-        transform: [
-            texture.transform.e00,
-            texture.transform.e01,
-            texture.transform.e02,
-            texture.transform.e10,
-            texture.transform.e11,
-            texture.transform.e12,
-            texture.transform.e20,
-            texture.transform.e21,
-            texture.transform.e22,
-        ],
-        params: texture.params
-    }));
-    const geometry = {subMeshes: jsSubMeshes, textures: jsTextures};
+    const geometry = {subMeshes, textures};
 
     return { childInfos, geometry } as const;
 }
