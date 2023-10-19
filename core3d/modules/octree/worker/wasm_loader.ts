@@ -11,5 +11,6 @@ export async function esbuildWasmInstance(wasmData: ArrayBuffer): Promise<WasmIn
     };
     const { instance } = await WebAssembly.instantiate(wasmData, imports);
     wasmWrapper.__wbg_set_wasm(instance.exports);
+    wasmWrapper.init_console();
     return wasmWrapper;
 }
