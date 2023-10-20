@@ -722,24 +722,29 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
                 (childInfo as any).descendantObjectIds = value.descendant_object_ids().slice()
             }
         }
+        value.free();
         return childInfo;
     });
 
     let {subMeshes, textures}  = schema.geometry(enableOutlines);
-    function vertexAttributeToJS(vertex_attr: VertexAttribute | undefined) {
-        if(vertex_attr === undefined) {
+    function vertexAttributeToJS(vertexAttr: VertexAttribute | undefined) {
+        if(vertexAttr === undefined) {
             return null;
         }
 
-        return {
-            kind: vertex_attr.kind,
-            buffer: vertex_attr.buffer,
-            componentCount: vertex_attr.componentCount,
-            componentType: vertex_attr.componentType,
-            normalized: vertex_attr.normalized,
-            byteOffset: vertex_attr.byteOffset,
-            byteStride: vertex_attr.byteStride,
-        }
+        const vertexAttrJs = {
+            kind: vertexAttr.kind,
+            buffer: vertexAttr.buffer,
+            componentCount: vertexAttr.componentCount,
+            componentType: vertexAttr.componentType,
+            normalized: vertexAttr.normalized,
+            byteOffset: vertexAttr.byteOffset,
+            byteStride: vertexAttr.byteStride,
+        };
+
+        vertexAttr.free();
+
+        return vertexAttrJs;
     }
 
     const jsSubMeshes: NodeSubMesh[] = subMeshes.map(subMesh => {
@@ -760,47 +765,67 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
             highlight: vertexAttributeToJS(vertexAttributesWasm.highlight),
             highlightTri: vertexAttributeToJS(vertexAttributesWasm.highlight_tri),
         };
-        return {
+        vertexAttributesWasm.free();
+
+        let subMeshJs = {
             materialType: subMesh.materialType,
             primitiveType: subMesh.primitiveType,
             numVertices: subMesh.numVertices,
             numTriangles: subMesh.numTriangles,
-            objectRanges: subMesh.objectRanges.map(range => ({
-                objectId: range.objectId,
-                beginVertex: range.beginVertex,
-                endVertex: range.endVertex,
-                beginTriangle: range.beginTriangle,
-                endTriangle: range.endTriangle
-            })),
+            objectRanges: subMesh.objectRanges.map(range => {
+                const ret = {
+                    objectId: range.objectId,
+                    beginVertex: range.beginVertex,
+                    endVertex: range.endVertex,
+                    beginTriangle: range.beginTriangle,
+                    endTriangle: range.endTriangle
+                };
+                range.free();
+                return ret;
+            }),
             vertexAttributes: vertexAtributesJs,
             vertexBuffers: subMesh.vertexBuffers,
             indices: subMesh.indices,
             baseColorTexture: subMesh.baseColorTexture,
-            drawRanges: subMesh.drawRanges.map(range => ({
-                childIndex: range.childIndex,
-                byteOffset: range.byteOffset,
-                first: range.first,
-                count: range.count
-            })),
+            drawRanges: subMesh.drawRanges.map(range => {
+                const rangeJs = {
+                    childIndex: range.childIndex,
+                    byteOffset: range.byteOffset,
+                    first: range.first,
+                    count: range.count
+                };
+                range.free();
+                return rangeJs;
+            }),
         };
+
+        subMesh.free();
+        return subMeshJs;
     });
 
-    const jsTextures: NodeTexture[] = textures.map((texture: Texture_2_0 | Texture_2_1) => ({
-        semantic: texture.semantic,
-        transform: [
-            texture.transform.e00,
-            texture.transform.e01,
-            texture.transform.e02,
-            texture.transform.e10,
-            texture.transform.e11,
-            texture.transform.e12,
-            texture.transform.e20,
-            texture.transform.e21,
-            texture.transform.e22,
-        ],
-        params: texture.params
-    }));
+    const jsTextures: NodeTexture[] = textures.map((texture: Texture_2_0 | Texture_2_1) => {
+        const textureJs = {
+            semantic: texture.semantic,
+            transform: [
+                texture.transform.e00,
+                texture.transform.e01,
+                texture.transform.e02,
+                texture.transform.e10,
+                texture.transform.e11,
+                texture.transform.e12,
+                texture.transform.e20,
+                texture.transform.e21,
+                texture.transform.e22,
+            ],
+            params: texture.params
+        };
+
+        texture.free();
+        return textureJs
+    });
     const geometry = {subMeshes: jsSubMeshes, textures: jsTextures};
+
+    schema.free();
 
     return { childInfos, geometry } as const;
 }
