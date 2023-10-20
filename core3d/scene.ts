@@ -4,7 +4,7 @@ import type { RootNodes } from "./modules/octree";
 import { decodeBase64 } from "./util";
 import { isSupportedVersion } from "./modules/octree";
 import { vec3, type ReadonlyVec3 } from "gl-matrix";
-import { requestOfflineFile } from "./offline";
+import { requestOfflineFile } from "offline/file";
 
 type Mutable<T> = { -readonly [P in keyof T]: T[P] };
 
@@ -25,10 +25,20 @@ export async function downloadScene(url: URL, abortSignal?: AbortSignal): Promis
     if (config.up) {
         // for now we assume that the presence of an up vector means cad-space.
         // until every scene is in cad space, we rotate it back into gl-space for backward compatibility.
-        let { offset, center } = config;
-        offset = flipCADToGLVec(offset);
-        center = flipCADToGLVec(center);
-        config = { ...config, offset, center };
+        const { offset, center, boundingSphere, aabb } = config;
+        config = {
+            ...config,
+            offset: flipCADToGLVec(offset),
+            center: flipCADToGLVec(center),
+            boundingSphere: {
+                radius: boundingSphere.radius,
+                center: flipCADToGLVec(boundingSphere.center)
+            },
+            aabb: {
+                min: flipCADToGLVec(aabb.min),
+                max: flipCADToGLVec(aabb.max),
+            }
+        };
     }
     if (!isSupportedVersion(config.version)) {
         throw new Error(`Unsupported scene version: ${config.variants}!`);
@@ -61,7 +71,8 @@ export async function createSceneRootNodes(context: OctreeContext, config: Scene
 }
 
 async function download<T extends "arrayBuffer" | "json">(url: URL, kind: T, signal?: AbortSignal) {
-    const response = await requestOfflineFile(url.pathname) ?? await fetch(url, { mode: "cors", signal });
+    const request = new Request(url, { mode: "cors", signal });
+    const response = await requestOfflineFile(request) ?? await fetch(request);
     if (response.ok) {
         return (await response[kind]()) as T extends "arrayBuffer" ? ArrayBuffer : SceneConfig;
     } else {

@@ -1,9 +1,9 @@
-import { type ReadonlyVec3, vec3, type ReadonlyQuat, mat3 } from "gl-matrix";
+import { type ReadonlyVec3, vec3, vec2, type ReadonlyQuat, mat3, type ReadonlyVec2, type ReadonlyVec4, glMatrix, vec4, mat4 } from "gl-matrix";
 import { downloadScene, type RenderState, type RenderStateChanges, defaultRenderState, initCore3D, mergeRecursive, RenderContext, type SceneConfig, modifyRenderState, type RenderStatistics, type DeviceProfile, type PickSample, type PickOptions, CoordSpace, type Core3DImports, type RenderStateCamera, validateRenderState, type Core3DImportMap, downloadCore3dImports } from "core3d";
 import { builtinControllers, ControllerInput, type BaseController, type PickContext, type BuiltinCameraControllerType } from "./controller";
 import { flipState } from "./flip";
 import { MeasureView, createMeasureView, type MeasureEntity, downloadMeasureImports, type MeasureImportMap, type MeasureImports } from "measure";
-import { inspectDeviations, type DeviationInspectionSettings, type DeviationInspections } from "./buffer_inspect";
+import { inspectDeviations, type DeviationInspectionSettings, type DeviationInspections, type OutlineIntersection, outlineLaser } from "./buffer_inspect";
 
 /**
  * A view base class for Novorender content.
@@ -59,7 +59,6 @@ export class View<
     private drsLowInterval = 100;
     private lastDrsAdjustTime = 0;
     private resolutionTier: 0 | 1 | 2 = 2;
-    private activeToonOutline = true;
 
     private currentDetailBias: number = 1;
 
@@ -200,7 +199,7 @@ export class View<
      */
     async availableEnvironments(indexUrl: URL): Promise<EnvironmentDescription[]> {
         let environments: EnvironmentDescription[] = [];
-        const response = await fetch(indexUrl.toString());
+        const response = await fetch(indexUrl.toString(), { mode: "cors" });
         if (response.ok) {
             const json = await response.json();
             environments = (json as string[]).map(name => {
@@ -208,6 +207,24 @@ export class View<
             });
         }
         return environments;
+    }
+
+    /**
+     * Retrieve list of network requests for given environment(s) for cache/offline purposes.
+     * @param environments The environment description objects.
+     * @remarks
+     * The returned requests are suitable for [Cache API](https://developer.mozilla.org/en-US/docs/Web/API/Cache/addAll).
+     */
+    static environmentRequests(...environments: EnvironmentDescription[]): readonly Request[] {
+        const urls: URL[] = [];
+        for (const environment of environments) {
+            const { url, thumnbnailURL } = environment;
+            urls.push(new URL("radiance.ktx", url));
+            urls.push(new URL("irradiance.ktx", url));
+            urls.push(new URL("background.ktx", url));
+            urls.push(new URL(thumnbnailURL));
+        }
+        return urls.map(url => (new Request(url, { mode: "cors" })));
     }
 
     /**
@@ -243,6 +260,49 @@ export class View<
         if (context) {
             const scale = devicePixelRatio * this.resolutionModifier;
             return inspectDeviations(await context.getDeviations(), scale, settings);
+        }
+    }
+
+    /**
+     * Create a list of intersections between the x and y axis through the tracer position
+     * @public
+     * @param laserPosition position where to calculate intersections,  
+     * @param perspective For tracer to work in perspective the 3d tracer position and plane to intersect is required,  
+     * @returns list of intersections (right, left, up ,down) 
+     * results will be ordered from  closest to furthest from the tracer poitn
+     */
+    async outlineLaser(laserPosition: ReadonlyVec2, perspective?: { laserPosition3d: ReadonlyVec3, plane: ReadonlyVec4 }): Promise<OutlineIntersection | undefined> {
+        const context = this._renderContext;
+        if (context) {
+            const scale = devicePixelRatio * this.resolutionModifier;
+            if (perspective) {
+                const { laserPosition3d, plane } = perspective;
+                const dir = vec3.fromValues(plane[0], plane[1], plane[2]);
+                const u = glMatrix.equals(Math.abs(vec3.dot(vec3.fromValues(0, 0, 1), dir)), 1)
+                    ? vec3.fromValues(0, 1, 0)
+                    : vec3.fromValues(0, 0, 1);
+                const r = vec3.cross(vec3.create(), u, dir);
+                vec3.cross(u, dir, r);
+                vec3.normalize(u, u);
+
+                vec3.cross(r, u, dir);
+                vec3.normalize(r, r);
+
+                const pts = (await this.measure).draw.toMarkerPoints([vec3.add(vec3.create(), laserPosition3d, r), vec3.add(vec3.create(), laserPosition3d, u)])
+                if (pts[0] == undefined || pts[1] == undefined) {
+                    return undefined;
+                }
+                const left = vec2.sub(vec2.create(), laserPosition, pts[0]);
+                vec2.normalize(left, left);
+                const right = vec2.fromValues(-left[0], -left[1]);
+                const up = vec2.sub(vec2.create(), laserPosition, pts[1]);
+                vec2.normalize(up, up);
+                const down = vec2.fromValues(-up[0], -up[1]);
+                return outlineLaser(await context.getOutlines(), laserPosition, scale,
+                    { left, right, down, up, tracerPosition3d: vec3.fromValues(laserPosition3d[0], laserPosition3d[2], -laserPosition3d[1]) });
+
+            }
+            return outlineLaser(await context.getOutlines(), laserPosition, scale);
         }
     }
 
@@ -299,6 +359,11 @@ export class View<
                         vec3.copy(edgeNormal2, b.normal);
                         sampleType = "edge";
                     }
+                    if (options?.pickOutline === true) {
+                        if (b.clippingOutline == false) {
+                            return a;
+                        }
+                    }
                     return a.depth < b.depth ? a : b
                 });
                 if (sampleType as any == "edge") {
@@ -307,6 +372,9 @@ export class View<
                             sampleType = "corner";
                         }
                     });
+                }
+                if (options?.pickOutline === true && centerSample.clippingOutline == false) {
+                    return undefined;
                 }
                 const worldViewMatrixNormal = context.prevState?.matrices.getMatrixNormal(CoordSpace.World, CoordSpace.View) ?? mat3.create();
                 const flippedSample: PickSampleExt = {
@@ -400,7 +468,12 @@ export class View<
 
                 if (isIdleFrame) { //increase resolution and detail bias on idleFrame
                     if (deviceProfile.tier > 0 && this.renderState.toonOutline.on == false) {
+                        //Enable toonOutline when on idle frame
                         this.modifyRenderState({ toonOutline: { on: true } });
+                    }
+                    if (deviceProfile.tier > 0 && this.renderState.outlines.on == false) {
+                        //Enable outline when on idle frame
+                        this.modifyRenderState({ outlines: { on: true } });
                     }
                     if (!wasIdle) {
                         //Set max quality and resolution when the camera stops moving
@@ -416,11 +489,10 @@ export class View<
                         //Reset back to default when camera starts moving
                         this.resolutionModifier = this.baseRenderResolution;
                         this.resolutionTier = 2;
-                        this.modifyRenderState({ toonOutline: { on: false } });
-                        //this.activeToonOutline = true; //Related to dynamic on off toon outline, planned for performance settings
+                        //Disable features when moving to increase performance, outlines are only disabled in pinhole
+                        this.modifyRenderState({ toonOutline: { on: false }, outlines: { on: this.renderState.camera.kind == "orthographic" } });
                         wasIdle = false;
                     } else {
-
                         frameIntervals.push(frameTime);
                         this.dynamicQualityAdjustment(frameIntervals);
                     }
@@ -601,14 +673,7 @@ export class View<
             frameIntervals.splice(0, 1);
             const cooldown = 3000;
             const now = performance.now();
-            //To handle dynamic on and off on toon outline.
-            // if (this.activeToonOutline) {
-            //     const activeToon = medianInterval < this.drsLowInterval && this.resolutionTier == 2;
-            //     if (this.activeToonOutline != activeToon) {
-            //         this.activeToonOutline = activeToon;
-            //         this.modifyRenderState({ toonOutline: { on: this.activeToonOutline } });
-            //     }
-            // }
+            //To handle dynamic on and off clipping outline based on framerate.
             if (now > this.lastDrsAdjustTime + cooldown) { // add a cooldown period before changing anything
                 this.dynamicResolutionScaling(medianInterval, now);
             }

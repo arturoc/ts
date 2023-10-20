@@ -351,7 +351,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
         // we need to provide default values for non-float vertex attributes in case they are not included in vertex buffer to avoid getting a type binding error.
         gl.vertexAttribI4ui(VertexAttributeIds.material, 0xff, 0, 0, 0);
         gl.vertexAttribI4ui(VertexAttributeIds.objectId, 0xffffffff, 0, 0, 0);
-        gl.vertexAttrib4f(VertexAttributeIds.color0, 0, 0, 0, 0);
+        gl.vertexAttrib4f(VertexAttributeIds.color0, 0, 0, 0, 0); // we don't really use vertex color for anything else than point clouds. We set this to 0 differentiate between textured and elevation-gradient terrain, since the latter will override color in vertex shader.
         gl.vertexAttrib4f(VertexAttributeIds.projectedPos, 0, 0, 0, 0);
         gl.vertexAttrib4f(VertexAttributeIds.deviations, 0, 0, 0, 0);
         gl.vertexAttribI4ui(VertexAttributeIds.highlight, 0, 0, 0, 0);
@@ -448,7 +448,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
 
         gl.bindTexture(gl.TEXTURE_2D, null);
 
-        if (deviceProfile.features.outline) {
+        if (deviceProfile.features.outline && state.outlines.on) {
             // transform outline plane into local space
 
             const renderOutlines = (plane: ReadonlyVec4, color: RGB, planeIndex = -1) => {
@@ -552,7 +552,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
             }
             gl.bindTexture(gl.TEXTURE_2D, null);
 
-            if (deviceProfile.features.outline) {
+            if (deviceProfile.features.outline && state.outlines.on) {
                 const renderOutlines = (plane: ReadonlyVec4, color: RGB, planeIndex = -1) => {
                     const [x, y, z, offset] = plane;
                     const p = vec4.fromValues(x, y, z, -offset);
@@ -581,8 +581,6 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
                         }
                     }
                 }
-                // render clipping outlines
-
             }
 
             if (rootNode.geometryKind == NodeGeometryKind.terrain && state.terrain.asBackground) {

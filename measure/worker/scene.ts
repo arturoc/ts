@@ -47,18 +47,39 @@ export class MeasureTool {
   snapObjects = new Array<PickInterface>();
   nextSnapIdx = 0;
   static geometryFactory: GeometryFactory = undefined!;
+  idToHash: Uint8Array | undefined;
 
   constructor() {
+  }
+
+  lookupHash(id: number) {
+    const { idToHash } = this;
+    if (idToHash && id < idToHash.length / 16) {
+      const offset = id * 16;
+      const slice = idToHash.subarray(offset, offset + 16);
+      return [...slice].map(b => {
+        const s = b.toString(16);
+        return s.length < 2 ? s.length == 1 ? "0" + s : "00" : s;
+      }).join("").toUpperCase();
+    }
+    return undefined;
   }
 
   async init(wasm: string | ArrayBuffer) {
     MeasureTool.geometryFactory = await createGeometryFactory(wasm);
   }
 
-  loadScene(baseUrl: string) {
+  async loadScene(baseUrl: string) {
     const brepUrl = new URL(baseUrl);
     brepUrl.pathname += "brep/";
     this.downloader = new Downloader(brepUrl);
+
+    try {
+      this.idToHash = new Uint8Array(await this.downloader.downloadArrayBuffer("object_id_to_brep_hash"));
+    } catch {
+      this.idToHash = undefined;
+    }
+
     this.crossSectionTool = new RoadTool(new URL(baseUrl));
     this.data.clear();
     this.snapObjects.length = 0;
@@ -80,11 +101,17 @@ export class MeasureTool {
     }
   }
 
-  async downloadBrep(name: string): Promise<ProductData | null> {
-    try {
-      return await this.downloader.downloadJson(name);
-    } catch {
-      return null;
+  async downloadBrep(id: number): Promise<ProductData | null> {
+    const { idToHash } = this;
+    if (idToHash) {
+      const hash = this.lookupHash(id);
+      return hash ? await this.downloader.downloadJson(hash) : null;
+    } else {
+      try {
+        return await this.downloader.downloadJson(`${id}.json`);
+      } catch {
+        return null;
+      }
     }
   }
 
@@ -93,7 +120,7 @@ export class MeasureTool {
   ): Promise<ProductData | undefined> {
     let product = this.data.get(id);
     if (product === undefined) {
-      product = await this.downloadBrep(`${id}.json`);
+      product = await this.downloadBrep(id);
       if (product && product.instances === undefined) {
         this.data.set(id, null);
         return undefined;
