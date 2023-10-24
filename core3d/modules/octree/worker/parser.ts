@@ -718,7 +718,6 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
         };
         if(value instanceof Child_2_1) {
             if (value.descendant_object_ids() !== null) {
-                console.log(value.descendant_object_ids());
                 (childInfo as any).descendantObjectIds = value.descendant_object_ids().slice()
             }
         }
