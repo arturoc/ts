@@ -18,7 +18,7 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] };
  * It may take several frames for any geometry to appear, and several seconds for it to fully resolve.
  * @category Render State
  */
-export async function downloadScene(url: URL, abortSignal?: AbortSignal): Promise<RenderStateScene> {
+export async function downloadScene(url: URL, abortSignal?: AbortSignal, useWasmParser = false): Promise<RenderStateScene> {
     const fullUrl = new URL(url);
     fullUrl.pathname += "scene.json";
     let config = (await download(fullUrl, "json", abortSignal)) as SceneConfig;
@@ -43,7 +43,7 @@ export async function downloadScene(url: URL, abortSignal?: AbortSignal): Promis
     if (!isSupportedVersion(config.version)) {
         throw new Error(`Unsupported scene version: ${config.variants}!`);
     }
-    return { url: url.toString(), config } as const;
+    return { url: url.toString(), config, useWasmParser } as const;
 }
 
 function flipCADToGLVec(v: ReadonlyVec3): ReadonlyVec3 {
@@ -55,7 +55,7 @@ function flipCADToGLVec(v: ReadonlyVec3): ReadonlyVec3 {
 export async function createSceneRootNodes(context: OctreeContext, config: SceneConfig, deviceProfile: DeviceProfile): Promise<RootNodes | undefined> {
     const { buffer } = decodeBase64(config.root);
     const { loader } = context;
-    const result = await loader.parseNode(buffer, "", deviceProfile, config.version);
+    const result = await loader.parseNode(buffer, "", deviceProfile, config.version, context.renderContext.currentState?.scene?.useWasmParser ?? false);
     if (!result)
         return;
     const { childInfos } = result;

@@ -330,7 +330,8 @@ export class OctreeNode {
         const { context, children, meshes, resourceBin } = this;
         const { renderContext, loader, version, highlightGeneration } = context;
         this.state = NodeState.downloading;
-        const payload = await loader.loadNode(this, version); // do actual downloading and parsing in worker
+        const useWasmParser = renderContext.currentState?.scene?.useWasmParser ?? false;
+        const payload = await loader.loadNode(this, version, useWasmParser); // do actual downloading and parsing in worker
         if (payload) {
             const { childInfos, geometry } = payload;
             for (const data of childInfos) {

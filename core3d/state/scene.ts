@@ -12,6 +12,8 @@ export interface RenderStateScene {
     readonly config: SceneConfig;
     /** Flags for whether to hide/filter various kinds of geometry. */
     readonly hide?: RenderStateStaticGeometryKinds;
+    /** Flag to enable/disable wasm parser */
+    readonly useWasmParser: boolean;
 }
 
 /** Axis-aligned bounding box

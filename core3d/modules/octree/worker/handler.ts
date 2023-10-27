@@ -58,8 +58,7 @@ export class LoaderHandler {
         if(this.wasm) {
             const { highlights } = this;
             const { id, version, separatePositionsBuffer, enableOutlines, applyFilter } = params;
-            const { childInfos, geometry } = parseNode(this.wasm, id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter);
-            const readyMsg: ReadyMessage = { kind: "ready", id, childInfos, geometry };
+            const { childInfos, geometry } = parseNode(this.wasm, id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter, params.useWasmParser ? Mode.Wasm : Mode.Js);
             const transfer: Transferable[] = [];
             for (const { vertexBuffers, indices } of geometry.subMeshes) {
                 transfer.push(...vertexBuffers);

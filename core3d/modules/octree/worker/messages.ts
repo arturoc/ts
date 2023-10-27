@@ -21,6 +21,7 @@ export interface ParseParams {
     readonly separatePositionsBuffer: boolean;
     readonly enableOutlines: boolean;
     readonly applyFilter: boolean;
+    readonly useWasmParser: boolean;
 }
 
 /** @internal */
@@ -63,6 +64,7 @@ export interface CloseMessage {
 export interface NodePayload {
     readonly childInfos: readonly NodeData[];
     readonly geometry: NodeGeometry;
+    readonly loadTime: number,
 }
 
 /** @internal */
