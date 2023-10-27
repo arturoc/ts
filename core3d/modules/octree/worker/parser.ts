@@ -806,25 +806,42 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
         return subMeshJs;
     });
 
-    const jsTextures: NodeTexture[] = textures.map((texture: Texture_2_0 | Texture_2_1) => {
-        const textureJs = {
-            semantic: texture.semantic,
-            transform: [
-                texture.transform.e00,
-                texture.transform.e01,
-                texture.transform.e02,
-                texture.transform.e10,
-                texture.transform.e11,
-                texture.transform.e12,
-                texture.transform.e20,
-                texture.transform.e21,
-                texture.transform.e22,
-            ],
-            params: texture.params
-        };
+    const jsTextures: Array<NodeTexture | undefined> = textures.map((texture: Texture_2_0 | Texture_2_1 | undefined) => {
+        if(texture != undefined) {
+            const textureJs = {
+                semantic: texture.semantic,
+                transform: [
+                    texture.transform.e00,
+                    texture.transform.e01,
+                    texture.transform.e02,
+                    texture.transform.e10,
+                    texture.transform.e11,
+                    texture.transform.e12,
+                    texture.transform.e20,
+                    texture.transform.e21,
+                    texture.transform.e22,
+                ],
+                params: {
+                    width: texture.params.width,
+                    height: texture.params.height,
+                    depth: texture.params.depth,
+                    kind: texture.params.kind as any,
+                    internalFormat: texture.params.internalFormat as any,
+                    type: texture.params.type as any,
+                    image: texture.params.image?.slice() ?? null,
+                }
+            };
 
-        texture.free();
-        return textureJs
+            let mipMaps = texture.params.mipMaps?.map((image) => image.slice());
+            if (mipMaps !== undefined) {
+                (textureJs as any).mipMaps = mipMaps;
+            }
+
+            texture.free();
+            return textureJs;
+        }else{
+            return undefined;
+        }
     });
     const geometry = {subMeshes: jsSubMeshes, textures: jsTextures};
 
