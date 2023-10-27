@@ -726,7 +726,11 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
         return childInfo;
     });
 
-    let {subMeshes, textures}  = schema.geometry(enableOutlines);
+    highlights.mutex.lockSync();
+    let highlightsWasm = schema.create_highlights(highlights.indices);
+    highlights.mutex.unlock();
+
+    let {subMeshes, textures}  = schema.geometry(enableOutlines, applyFilter, highlightsWasm);
     function vertexAttributeToJS(vertexAttr: VertexAttribute | undefined) {
         if(vertexAttr === undefined) {
             return null;
