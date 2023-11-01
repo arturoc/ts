@@ -462,6 +462,16 @@ export class View<
                 this.modifyRenderState(cameraChanges);
             }
 
+            if((window as any)._startDownload_ !== undefined) {
+                const elapsed = performance.now() - (window as any)._startDownload_;
+                if(elapsed > 6000 && (window as any)._lastTimeLog_ != (window as any)._totalTime_){
+                    const wasmParser = _renderContext?.currentState?.scene?.useWasmParser ?? false;
+                    console.log(`${wasmParser ? "Wasm parser" : "Js parser"} time: ${(window as any)._totalTime_}`);
+                    console.log(`render outlines time: ${(window as any)._totalRenderOutlinesTime_}`);
+                    (window as any)._lastTimeLog_ = (window as any)._totalTime_;
+                }
+            }
+
             const isIdleFrame = idleFrameTime > 500 && !this._activeController.moving;
             if (_renderContext && !_renderContext.isContextLost()) {
                 _renderContext.poll(); // poll for events, such as async reads and shader linking

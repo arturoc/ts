@@ -7,7 +7,7 @@ import type { Mutex } from "../mutex";
 import * as Current from "./2_1";
 import * as Previous from "./2_0";
 import type { WasmInstance } from "./wasm_loader";
-import { type VertexAttribute, type Texture_2_0, type Texture_2_1, Child_2_1 } from "@novorender/wasm-parser";
+import { type VertexAttribute, type Texture_2_0, type Texture_2_1, Child_2_1, Arena } from "@novorender/wasm-parser";
 
 const { MaterialType, OptionalVertexAttribute, PrimitiveType, TextureSemantic } = Current;
 type Current = typeof Current;
@@ -673,10 +673,10 @@ function getGeometry(schema: Schema, separatePositionBuffer: boolean, enableOutl
 
 
 // wasm implementation
-export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
+export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
     const data = new Uint8Array(buffer, 0);
 
-    const schema = version == Current.version ? wasm.Schema.parse_2_1(data) : wasm.Schema.parse_2_0(data) ;
+    const schema = version == Current.version ? wasm.Schema.parse_2_1(data, wasmArena) : wasm.Schema.parse_2_0(data, wasmArena) ;
     const childInfos = schema.children().map(value => {
         let childInfo = {
             id: value.id(),
@@ -693,14 +693,14 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
             bounds: {
                 box: {
                     min: vec3.fromValues(
-                        value.bounds._box.min.x,
-                        value.bounds._box.min.y,
-                        value.bounds._box.min.z,
+                        value.bounds.box_.min.x,
+                        value.bounds.box_.min.y,
+                        value.bounds.box_.min.z,
                     ),
                     max: vec3.fromValues(
-                        value.bounds._box.max.x,
-                        value.bounds._box.max.y,
-                        value.bounds._box.max.z,
+                        value.bounds.box_.max.x,
+                        value.bounds.box_.max.y,
+                        value.bounds.box_.max.z,
                     ),
                 },
                 sphere: {
@@ -783,7 +783,6 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
                     beginTriangle: range.beginTriangle,
                     endTriangle: range.endTriangle
                 };
-                range.free();
                 return ret;
             }),
             vertexAttributes: vertexAtributesJs,
@@ -797,12 +796,10 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
                     first: range.first,
                     count: range.count
                 };
-                range.free();
                 return rangeJs;
             }),
         };
 
-        subMesh.free();
         return subMeshJs;
     });
 
@@ -837,7 +834,6 @@ export function parseNodeWasm(wasm: WasmInstance, id: string, separatePositionBu
                 (textureJs as any).mipMaps = mipMaps;
             }
 
-            texture.free();
             return textureJs;
         }else{
             return undefined;
@@ -864,39 +860,34 @@ export function parseNodeJs(id: string, separatePositionBuffer: boolean, enableO
     return { childInfos, geometry } as const;
 }
 
+export const enum Mode {
+    Wasm,
+    Js,
+    ComparePerformance
+}
+
 // Temporary function to test both JS and wasm versions
-export function parseNode(wasm: WasmInstance, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
-    enum Mode {
-        Wasm,
-        Js,
-        ComparePerformance
-    }
-
-    function fnmode(): Mode {
-        return Mode.Wasm
-    }
-    const mode: Mode = fnmode();
-
+export function parseNode(wasm: WasmInstance, wasmArena: Arena, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean, mode = Mode.Js) {
     // Test wasm implementation
     switch (mode) {
         case Mode.Wasm:
-            return parseNodeWasm(wasm, id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
+            return parseNodeWasm(wasm, wasmArena, id, enableOutlines, version, buffer, highlights, applyFilter);
         case Mode.Js:
             return parseNodeJs(id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
         case Mode.ComparePerformance:
+            let childInfosWasm;
+            let geometryWasm;
+            {
+                const {childInfos, geometry} = parseNodeWasm(wasm, wasmArena, id, enableOutlines, version, buffer, highlights, applyFilter);
+                childInfosWasm = childInfos;
+                geometryWasm = geometry;
+            }
             let childInfosJs;
             let geometryJs;
             {
                 const {childInfos, geometry} = parseNodeJs(id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
                 childInfosJs = childInfos;
                 geometryJs = geometry;
-            }
-            let childInfosWasm;
-            let geometryWasm;
-            {
-                const {childInfos, geometry} = parseNodeWasm(wasm, id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
-                childInfosWasm = childInfos;
-                geometryWasm = geometry;
             }
             return {childInfos: childInfosWasm, geometry: geometryWasm};
     }

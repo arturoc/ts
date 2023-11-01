@@ -4,6 +4,8 @@ import { orthoNormalBasisMatrixFromPlane } from "core3d/util";
 import { glCreateBuffer, glCreateVertexArray, glDelete, glDraw, glState } from "webgl2";
 import { OctreeNode } from "./node";
 import type { Mesh } from "./mesh";
+import type { WasmInstance } from "./worker/wasm_loader";
+import type { Arena } from "@novorender/wasm-parser";
 
 type NodeLineClusters = Map<number, readonly LineCluster[]>; // key: child_index
 
@@ -40,12 +42,15 @@ class NodeIntersection {
 class NodeIntersectionBuilder {
     static readonly maxBufferSize = 0x100000;
     readonly clusters: LineCluster[] = [];
-    readonly buffer = new Float32Array(NodeIntersectionBuilder.maxBufferSize);
     offset = 0;
     // get outputBuffer() { return this.buffer.subarray(this.offset); }
     emitVertex(x: number, y: number): void {
         this.buffer[this.offset++] = x;
         this.buffer[this.offset++] = y;
+    }
+
+    constructor(readonly buffer: Float32Array) {
+
     }
 }
 
@@ -96,11 +101,11 @@ export class OutlineRenderer {
         this.localPlaneMatrix = localPlaneMatrix;
     }
 
-    *intersectTriangles(renderNodes: readonly RenderNode[]): IterableIterator<LineCluster> {
+    *intersectTriangles(wasm: WasmInstance | undefined, arena: Arena | undefined, renderNodes: readonly RenderNode[]): IterableIterator<LineCluster> {
         const lineClusterArrays = new Map<number, LineVertices[]>(); // key: object_id
         for (const { mask, node } of renderNodes) {
             if (node.intersectsPlane(this.plane)) {
-                const nodeClusters = this.nodeLinesCache.get(node) ?? this.createNodeLineClusters(node);
+                const nodeClusters = this.nodeLinesCache.get(node) ?? this.createNodeLineClusters(wasm, arena, node);
                 // convert clusters into a map by objectId by merging the vertices of actively rendered child indices
                 for (const [childIndex, clusters] of nodeClusters) {
                     if ((1 << childIndex) & mask) {
@@ -128,26 +133,40 @@ export class OutlineRenderer {
     }
 
     // create intersection line clusters for node
-    createNodeLineClusters(node: OctreeNode) {
+    createNodeLineClusters(wasm: WasmInstance | undefined, arena: Arena | undefined, node: OctreeNode) {
         const childBuilders = new Map<ChildIndex, NodeIntersectionBuilder>();
         const { context, localSpaceTranslation, localPlaneMatrix } = this;
         const { gl } = context.renderContext;
         const { denormMatrix } = OutlineRenderer;
         const modelLocalMatrix = node.getModelLocalMatrix(localSpaceTranslation);
-        const modelPlaneMatrix = mat4.create();
+        let modelPlaneMatrix = mat4.create();
         // modelPlaneMatrix = localPlaneMatrix * modelLocalMatrix * denormMatrix
         mat4.mul(modelPlaneMatrix, mat4.mul(modelPlaneMatrix, localPlaneMatrix, modelLocalMatrix), denormMatrix);
+        let wasmModePlaneMatrix;
+        if(wasm !== undefined && arena !== undefined) {
+            if (modelPlaneMatrix instanceof Array) {
+                wasmModePlaneMatrix = wasm.allocate_mat4(new Float32Array(modelPlaneMatrix));
+            }else{
+                wasmModePlaneMatrix = wasm.allocate_mat4(modelPlaneMatrix);
+            }
+        }
         for (const mesh of node.meshes) {
             if (mesh.numTriangles && mesh.drawParams.mode == "TRIANGLES" && !mesh.baseColorTexture && mesh.idxBuf) {
                 const { drawRanges, objectRanges } = mesh;
-                const { idxBuf, posBuf } = getMeshBuffers(gl, mesh);
+                const { idxBuf, posBuf } = getMeshBuffers(arena, gl, mesh);
                 // intersect triangles for all draw ranges
                 for (const drawRange of drawRanges) {
                     const { childIndex } = drawRange;
 
                     let childBuilder = childBuilders.get(childIndex);
                     if (!childBuilder) {
-                        childBuilder = new NodeIntersectionBuilder();
+                        let buffer;
+                        if (arena !== undefined) {
+                            buffer = arena.allocate_f32(NodeIntersectionBuilder.maxBufferSize);
+                        }else{
+                            buffer = new Float32Array(NodeIntersectionBuilder.maxBufferSize);
+                        }
+                        childBuilder = new NodeIntersectionBuilder(buffer);
                         childBuilders.set(childIndex, childBuilder);
                     }
                     const { clusters, buffer } = childBuilder;
@@ -161,10 +180,23 @@ export class OutlineRenderer {
                         const { objectId } = objectRange;
                         const begin = objectRange.beginTriangle * 3;
                         const end = objectRange.endTriangle * 3;
+                        // console.log(idxBuf.length);
                         // const numTris = end - begin;
                         const idxView = idxBuf.subarray(begin, end);
                         const beginOffset = childBuilder.offset;
-                        const lines = intersectTriangles(buffer, childBuilder.offset, idxView, posBuf, modelPlaneMatrix);
+
+                        let lines;
+                        if(wasm !== undefined && wasmModePlaneMatrix) {
+                            const output = buffer.subarray(childBuilder.offset);
+                            if(idxView instanceof Uint16Array) {
+                                lines = wasm.intersect_triangles_u16(idxView, posBuf, wasmModePlaneMatrix, output);
+                            }else{
+                                lines = wasm.intersect_triangles_u32(idxView, posBuf, wasmModePlaneMatrix, output);
+                            }
+                        }else{
+                            lines = intersectTriangles(buffer, childBuilder.offset, idxView, posBuf, modelPlaneMatrix);
+                        }
+
                         if (lines) {
                             childBuilder.offset += lines * 4;
                             const endOffset = childBuilder.offset;
@@ -185,6 +217,10 @@ export class OutlineRenderer {
             [...childBuilders.entries()].map(([childIndex, builder]) => ([childIndex, builder.clusters] as const))
         );
         this.nodeLinesCache.set(node, lineClusters);
+
+        if(arena  !== undefined) {
+            arena.reset();
+        }
         return lineClusters;
     }
 
@@ -256,17 +292,31 @@ export class OutlineRenderer {
     }
 }
 
-function getMeshBuffers(gl: WebGL2RenderingContext, mesh: Mesh) {
+function getMeshBuffers(arena: Arena | undefined, gl: WebGL2RenderingContext, mesh: Mesh) {
     gl.bindVertexArray(null);
     const numIndices = mesh.numTriangles * 3;
     const { numVertices } = mesh;
     // get index buffer
-    const IdxType = numVertices > 0xffff ? Uint32Array : Uint16Array;
-    const idxBuf = new IdxType(numIndices);
+    let idxBuf;
+    if(arena !== undefined) {
+        if(numVertices > 0xffff) {
+            idxBuf = arena.allocate_u32(numIndices);
+        }else{
+            idxBuf = arena.allocate_u16(numIndices);
+        }
+    }else{
+        const IdxType = numVertices > 0xffff ? Uint32Array : Uint16Array;
+        idxBuf = new IdxType(numIndices);
+    }
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.idxBuf);
     gl.getBufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, idxBuf, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
-    const posBuf = new Int16Array(numVertices * 3);
+    let posBuf;
+    if(arena !== undefined) {
+        posBuf = arena.allocate_i16(numVertices * 3);
+    }else{
+        posBuf = new Int16Array(numVertices * 3);
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posVB);
     gl.getBufferSubData(gl.ARRAY_BUFFER, 0, posBuf, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);

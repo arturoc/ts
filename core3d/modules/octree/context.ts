@@ -12,8 +12,11 @@ import { OctreeModule, Gradient, type Resources, type Uniforms, ShaderMode, Shad
 import { Mutex } from "./mutex";
 import { decodeBase64 } from "core3d/util";
 import { OutlineRenderer } from "./outlines";
+import { esbuildWasmInstance, type WasmInstance } from "./worker/wasm_loader";
+import { Arena } from "@novorender/wasm-parser";
 
 const enum UBO { camera, clipping, scene, node };
+const use_wasm_intersections = false;
 
 export interface RenderNode {
     readonly mask: number;
@@ -48,6 +51,8 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
     hidden = [false, false, false, false, false] as readonly [boolean, boolean, boolean, boolean, boolean];
     readonly highlight;
     highlightGeneration = 0;
+    wasm: WasmInstance | undefined;
+    arena: Arena | undefined;
     private compiling = false;
 
     constructor(readonly renderContext: RenderContext, readonly module: OctreeModule, readonly uniforms: Uniforms, readonly resources: Resources, buffer: SharedArrayBuffer, readonly loader: NodeLoader) {
@@ -56,6 +61,9 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
             indices: new Uint8Array(buffer, 4),
             mutex: new Mutex(buffer),
         } as const;
+        if(use_wasm_intersections) {
+            this.setWasm(renderContext);
+        }
     }
 
     get highlights() {
@@ -468,12 +476,15 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
                         outlineRenderer = new OutlineRenderer(this, state.localSpaceTranslation, p);
                         outlineRenderers.set(plane, outlineRenderer);
                     }
-                    const [...lineClusters] = outlineRenderer.intersectTriangles(renderNodes);
+                    const [...lineClusters] = outlineRenderer.intersectTriangles(this.wasm, this.arena, renderNodes);
                     const { count, vao } = outlineRenderer.makeVAO(lineClusters);
                     outlineRenderer.renderLines(count, vao);
                     glDelete(gl, vao);
                     const end = performance.now();
-                    console.log(`lines: ${count} time:${end - begin}`);
+                    if((window as any)._totalRenderOutlinesTime_ === undefined) {
+                        (window as any)._totalRenderOutlinesTime_ = 0
+                    }
+                    (window as any)._totalRenderOutlinesTime_ += end - begin;
                 } else {
                     // render clipping outlines
                     glState(gl, {
@@ -724,6 +735,11 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
         }
         this.suspendUpdates = false;
         this.renderContext.changed = true;
+    }
+
+    private async setWasm(renderContext: RenderContext) {
+        this.wasm = await esbuildWasmInstance(renderContext.imports.parserWasm);
+        this.arena = new Arena;
     }
 }
 

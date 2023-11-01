@@ -1,8 +1,9 @@
 import { AbortableDownload, Downloader } from "./download";
 import { Mutex } from "../mutex";
-import { parseNode } from "./parser";
+import { Mode, parseNode } from "./parser";
 import type { AbortAllMessage, AbortMessage, AbortedAllMessage, AbortedMessage, ParseMessage, ErrorMessage, LoadMessage, ReadyMessage, MessageRequest, MessageResponse, ParseParams, BufferSet, InitMessage } from "./messages";
 import { esbuildWasmInstance, type WasmInstance } from "./wasm_loader";
+import { Arena } from "@novorender/wasm-parser";
 
 export interface HighlightsBuffer {
     readonly buffer: SharedArrayBuffer;
@@ -15,6 +16,7 @@ export class LoaderHandler {
     readonly downloads = new Map<string, AbortableDownload>();
     highlights: HighlightsBuffer = undefined!; // will be set right after construction by "buffer" message
     wasm: WasmInstance | undefined;
+    wasmArena: Arena | undefined;
 
     constructor(readonly send: (msg: MessageResponse, transfer?: Transferable[]) => void) {
     }
@@ -46,6 +48,8 @@ export class LoaderHandler {
         const {wasmData, buffer} = msg;
 
         this.wasm = await esbuildWasmInstance(wasmData);
+        this.wasmArena = new Arena();
+
 
         const indices = new Uint8Array(buffer, 4);
         const mutex = new Mutex(buffer);
@@ -55,10 +59,12 @@ export class LoaderHandler {
     }
 
     private parseBuffer(buffer: ArrayBuffer, params: ParseParams) {
-        if(this.wasm) {
+        if(this.wasm && this.wasmArena) {
             const { highlights } = this;
             const { id, version, separatePositionsBuffer, enableOutlines, applyFilter } = params;
-            const { childInfos, geometry } = parseNode(this.wasm, id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter, params.useWasmParser ? Mode.Wasm : Mode.Js);
+            const loadStart = performance.now();
+            const { childInfos, geometry } = parseNode(this.wasm, this.wasmArena.clone(), id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter, params.useWasmParser ? Mode.Wasm : Mode.Js);
+            const readyMsg: ReadyMessage = { kind: "ready", id, childInfos, geometry, loadTime: performance.now() - loadStart };
             const transfer: Transferable[] = [];
             for (const { vertexBuffers, indices } of geometry.subMeshes) {
                 transfer.push(...vertexBuffers);
