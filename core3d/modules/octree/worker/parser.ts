@@ -825,7 +825,7 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
                     kind: texture.params.kind as any,
                     internalFormat: texture.params.internalFormat as any,
                     type: texture.params.type as any,
-                    image: texture.params.image?.slice() ?? null,
+                    image: texture.params.image ?? null,
                 }
             };
 
