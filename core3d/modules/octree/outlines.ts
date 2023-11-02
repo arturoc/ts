@@ -7,17 +7,12 @@ import type { Mesh } from "./mesh";
 import type { WasmInstance } from "./worker/wasm_loader";
 import type { Arena } from "@novorender/wasm-parser";
 
-type NodeLineClusters = Map<number, readonly LineCluster[]>; // key: child_index
+type NodeLineVertices = Map<number, LineVertices>; // key: child_index
 
 // type LineVertices = readonly ReadonlyVec2[]; // use Float32Array instead?;
 type LineVertices = Float32Array;
 type ChildIndex = number;
 type ObjectIndex = number;
-
-export interface LineCluster {
-    readonly objectId: number;
-    readonly vertices: LineVertices;
-}
 
 interface ChildRange {
     readonly childIndex: number;
@@ -41,7 +36,6 @@ class NodeIntersection {
 
 class NodeIntersectionBuilder {
     static readonly maxBufferSize = 0x100000;
-    readonly clusters: LineCluster[] = [];
     offset = 0;
     // get outputBuffer() { return this.buffer.subarray(this.offset); }
     emitVertex(x: number, y: number): void {
@@ -49,8 +43,16 @@ class NodeIntersectionBuilder {
         this.buffer[this.offset++] = y;
     }
 
-    constructor(readonly buffer: Float32Array) {
+    constructor(readonly buffer: Float32Array, readonly ownedBuffer: boolean) {
 
+    }
+
+    vertices() {
+        if (this.ownedBuffer){
+            return this.buffer.subarray(0, this.offset)
+        }else{
+            return this.buffer.slice(0, this.offset)
+        }
     }
 }
 
@@ -88,7 +90,7 @@ export class OutlineRenderer {
     static readonly denormMatrix = normInt16ToFloatMatrix();
     readonly planeLocalMatrix: ReadonlyMat4;
     readonly localPlaneMatrix: ReadonlyMat4;
-    readonly nodeLinesCache = new WeakMap<OctreeNode, NodeLineClusters>();
+    readonly nodeLinesCache = new WeakMap<OctreeNode, NodeLineVertices>();
     readonly nodeIntersectionCache = new WeakMap<OctreeNode, NodeIntersection>();
 
     constructor(
@@ -101,39 +103,22 @@ export class OutlineRenderer {
         this.localPlaneMatrix = localPlaneMatrix;
     }
 
-    *intersectTriangles(wasm: WasmInstance | undefined, arena: Arena | undefined, renderNodes: readonly RenderNode[]): IterableIterator<LineCluster> {
-        const lineClusterArrays = new Map<number, LineVertices[]>(); // key: object_id
+    *intersectTriangles(wasm: WasmInstance | undefined, arena: Arena | undefined, renderNodes: readonly RenderNode[]): IterableIterator<LineVertices> {
         for (const { mask, node } of renderNodes) {
             if (node.intersectsPlane(this.plane)) {
-                const nodeClusters = this.nodeLinesCache.get(node) ?? this.createNodeLineClusters(wasm, arena, node);
+                const nodeLineVertices = this.nodeLinesCache.get(node) ?? this.createNodeLineVertices(wasm, arena, node);
                 // convert clusters into a map by objectId by merging the vertices of actively rendered child indices
-                for (const [childIndex, clusters] of nodeClusters) {
+                for (const [childIndex, vertices] of nodeLineVertices) {
                     if ((1 << childIndex) & mask) {
-                        for (const { objectId, vertices } of clusters) {
-                            let arr = lineClusterArrays.get(objectId);
-                            if (!arr) {
-                                arr = [];
-                                lineClusterArrays.set(objectId, arr);
-                            }
-                            arr.push(vertices);
-                        }
+                        yield vertices;
                     }
                 }
             }
         }
-        // flatten vertices into a single array per object_id
-        // this should probably be converted into a float32array instead, or possibly directly into GPU vertex buffer.
-        // let lineClusterMap = new Map<number, LineCluster>();
-        let lines = 0;
-        for (const [objectId, arr] of lineClusterArrays) {
-            const cluster = { objectId, vertices: flattenF32Arrays(arr) } as const satisfies LineCluster;
-            lines += cluster.vertices.length;
-            yield cluster;
-        }
     }
 
     // create intersection line clusters for node
-    createNodeLineClusters(wasm: WasmInstance | undefined, arena: Arena | undefined, node: OctreeNode) {
+    createNodeLineVertices(wasm: WasmInstance | undefined, arena: Arena | undefined, node: OctreeNode) {
         const childBuilders = new Map<ChildIndex, NodeIntersectionBuilder>();
         const { context, localSpaceTranslation, localPlaneMatrix } = this;
         const { gl } = context.renderContext;
@@ -163,49 +148,41 @@ export class OutlineRenderer {
                         let buffer;
                         if (arena !== undefined) {
                             buffer = arena.allocate_f32(NodeIntersectionBuilder.maxBufferSize);
+                            childBuilder = new NodeIntersectionBuilder(buffer, false);
                         }else{
                             buffer = new Float32Array(NodeIntersectionBuilder.maxBufferSize);
+                            childBuilder = new NodeIntersectionBuilder(buffer, true);
                         }
-                        childBuilder = new NodeIntersectionBuilder(buffer);
                         childBuilders.set(childIndex, childBuilder);
                     }
-                    const { clusters, buffer } = childBuilder;
+                    const { buffer } = childBuilder;
 
                     const beginTriangle = drawRange.first / 3;
                     const endTriangle = beginTriangle + drawRange.count / 3;
+                    const idxViews = [];
                     // extract one object range at a time.
                     for (const objectRange of objectRanges) {
                         if (objectRange.beginTriangle < beginTriangle || objectRange.endTriangle > endTriangle)
                             continue;
-                        const { objectId } = objectRange;
                         const begin = objectRange.beginTriangle * 3;
                         const end = objectRange.endTriangle * 3;
-                        // console.log(idxBuf.length);
-                        // const numTris = end - begin;
                         const idxView = idxBuf.subarray(begin, end);
-                        const beginOffset = childBuilder.offset;
-
-                        let lines;
-                        if(wasm !== undefined && wasmModePlaneMatrix) {
-                            const output = buffer.subarray(childBuilder.offset);
-                            if(idxView instanceof Uint16Array) {
-                                lines = wasm.intersect_triangles_u16(idxView, posBuf, wasmModePlaneMatrix, output);
-                            }else{
-                                lines = wasm.intersect_triangles_u32(idxView, posBuf, wasmModePlaneMatrix, output);
-                            }
-                        }else{
-                            lines = intersectTriangles(buffer, childBuilder.offset, idxView, posBuf, modelPlaneMatrix);
-                        }
-
-                        if (lines) {
-                            childBuilder.offset += lines * 4;
-                            const endOffset = childBuilder.offset;
-                            const vertices = buffer.slice(beginOffset, endOffset);
-                            // TODO: Clip lines against other clipping planes?
-                            const lineCluster = { objectId, vertices } as const satisfies LineCluster;
-                            clusters.push(lineCluster);
-                        }
+                        idxViews.push(idxView);
                     }
+
+                    let lines = 0;
+                    if(wasm !== undefined && wasmModePlaneMatrix) {
+                        const output = buffer.subarray(childBuilder.offset);
+                        if(idxBuf instanceof Uint16Array) {
+                            lines = wasm.intersect_triangles_u16(idxViews, posBuf, wasmModePlaneMatrix, output);
+                        }else{
+                            lines = wasm.intersect_triangles_u32(idxViews, posBuf, wasmModePlaneMatrix, output);
+                        }
+                    }else{
+                        lines = intersectTriangles(buffer, childBuilder.offset, idxViews, posBuf, modelPlaneMatrix);
+                    }
+
+                    childBuilder.offset += lines * 4;
                 }
             }
         }
@@ -213,32 +190,30 @@ export class OutlineRenderer {
         // this.makeVAO([{ objectId: 0xffff_ffff, vertices: lineVertBuf.subarray(0, lineVertBufOffset) }])
         // const nodeIntersection = new NodeIntersection(linesVAO);
         // this.nodeIntersectionCache.set(node, nodeIntersection);
-        const lineClusters = new Map<ChildIndex, readonly LineCluster[]>(
-            [...childBuilders.entries()].map(([childIndex, builder]) => ([childIndex, builder.clusters] as const))
+        const lineClusters = new Map<ChildIndex, LineVertices>(
+            [...childBuilders.entries()].map(([childIndex, builder]) => ([childIndex, builder.vertices()] as const))
         );
         this.nodeLinesCache.set(node, lineClusters);
 
-        if(arena  !== undefined) {
-            arena.reset();
-        }
+        arena?.reset();
         return lineClusters;
     }
 
-    makeLinesVAO(lineClusters: readonly LineCluster[]) {
+    makeLinesVAO(lineVertices: readonly LineVertices[]) {
         let count = 0;
         let vao: WebGLVertexArrayObject | null = null;
-        if (lineClusters.length > 0) {
+        if (lineVertices.length > 0) {
             const { context } = this;
             const { gl } = context.renderContext;
             let totalLines = 0;
-            for (const { vertices } of lineClusters) {
+            for (const vertices of lineVertices) {
                 totalLines += vertices.length / 4;
             }
             const pos = new Float32Array(totalLines * 4);
             const color = new Uint32Array(totalLines);
             const objectId = new Uint32Array(totalLines);
             let lineOffset = 0;
-            for (const { vertices } of lineClusters) {
+            for (const vertices of lineVertices) {
                 const numLines = vertices.length / 4;
                 pos.set(vertices, lineOffset * 4);
                 color.fill(0xff00_00ff, lineOffset, lineOffset + numLines);
@@ -387,7 +362,7 @@ function planeMatrices(plane: ReadonlyVec4, localSpaceTranslation: ReadonlyVec3)
  * @param pos Vertex positions in model (node) space, as snorm16
  * @param modelToPlaneMatrix Matrix to transform from snorm16 model space into plane space
  */
-function intersectTriangles(output: Float32Array, offset: number, idx: Uint16Array | Uint32Array, pos: Int16Array, modelToPlaneMatrix: ReadonlyMat4) {
+function intersectTriangles(output: Float32Array, offset: number, idxViews: Array<Uint16Array | Uint32Array>, pos: Int16Array, modelToPlaneMatrix: ReadonlyMat4) {
     const p0 = vec3.create(); const p1 = vec3.create(); const p2 = vec3.create();
     let n = 0;
     function emit(x: number, y: number) {
@@ -396,29 +371,31 @@ function intersectTriangles(output: Float32Array, offset: number, idx: Uint16Arr
         n++;
     }
 
-    // for each triangle...
-    console.assert(idx.length % 3 == 0); // assert that we are dealing with triangles.
-    for (let i = 0; i < idx.length; i += 3) {
-        const i0 = idx[i + 0]; const i1 = idx[i + 1]; const i2 = idx[i + 2];
-        vec3.set(p0, pos[i0 * 3 + 0], pos[i0 * 3 + 1], pos[i0 * 3 + 2]);
-        vec3.set(p1, pos[i1 * 3 + 0], pos[i1 * 3 + 1], pos[i1 * 3 + 2]);
-        vec3.set(p2, pos[i2 * 3 + 0], pos[i2 * 3 + 1], pos[i2 * 3 + 2]);
-        // transform positions into clipping plane space, i.e. xy on plane, z above or below
-        vec3.transformMat4(p0, p0, modelToPlaneMatrix);
-        vec3.transformMat4(p1, p1, modelToPlaneMatrix);
-        vec3.transformMat4(p2, p2, modelToPlaneMatrix);
-        // check if z-coords are greater and less than 0
-        const z0 = p0[2]; const z1 = p1[2]; const z2 = p2[2];
-        const gt0 = z0 > 0; const gt1 = z1 > 0; const gt2 = z2 > 0;
-        const lt0 = z0 < 0; const lt1 = z1 < 0; const lt2 = z2 < 0;
-        // does triangle intersect plane?
-        // this test is not just a possible optimization, but also excludes problematic triangles that straddles the plane along an edge
-        if ((gt0 || gt1 || gt2) && (lt0 || lt1 || lt2)) { // SIMD: any()?
-            // check for edge intersections
-            intersectEdge(emit, p0, p1);
-            intersectEdge(emit, p1, p2);
-            intersectEdge(emit, p2, p0);
-            console.assert(n % 2 == 0); // check that there are always pairs of vertices
+    for (const idx of idxViews) {
+        // for each triangle...
+        console.assert(idx.length % 3 == 0); // assert that we are dealing with triangles.
+        for (let i = 0; i < idx.length; i += 3) {
+            const i0 = idx[i + 0]; const i1 = idx[i + 1]; const i2 = idx[i + 2];
+            vec3.set(p0, pos[i0 * 3 + 0], pos[i0 * 3 + 1], pos[i0 * 3 + 2]);
+            vec3.set(p1, pos[i1 * 3 + 0], pos[i1 * 3 + 1], pos[i1 * 3 + 2]);
+            vec3.set(p2, pos[i2 * 3 + 0], pos[i2 * 3 + 1], pos[i2 * 3 + 2]);
+            // transform positions into clipping plane space, i.e. xy on plane, z above or below
+            vec3.transformMat4(p0, p0, modelToPlaneMatrix);
+            vec3.transformMat4(p1, p1, modelToPlaneMatrix);
+            vec3.transformMat4(p2, p2, modelToPlaneMatrix);
+            // check if z-coords are greater and less than 0
+            const z0 = p0[2]; const z1 = p1[2]; const z2 = p2[2];
+            const gt0 = z0 > 0; const gt1 = z1 > 0; const gt2 = z2 > 0;
+            const lt0 = z0 < 0; const lt1 = z1 < 0; const lt2 = z2 < 0;
+            // does triangle intersect plane?
+            // this test is not just a possible optimization, but also excludes problematic triangles that straddles the plane along an edge
+            if ((gt0 || gt1 || gt2) && (lt0 || lt1 || lt2)) { // SIMD: any()?
+                // check for edge intersections
+                intersectEdge(emit, p0, p1);
+                intersectEdge(emit, p1, p2);
+                intersectEdge(emit, p2, p0);
+                console.assert(n % 2 == 0); // check that there are always pairs of vertices
+            }
         }
     }
     return n / 2;

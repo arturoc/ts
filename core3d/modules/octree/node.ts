@@ -333,10 +333,9 @@ export class OctreeNode {
         const useWasmParser = renderContext.currentState?.scene?.useWasmParser ?? false;
         const payload = await loader.loadNode(this, version, useWasmParser); // do actual downloading and parsing in worker
         if (payload) {
-            if ((window as any)._totalTime_ == undefined) {
-                (window as any)._totalTime_ = payload.loadTime;
-            }else{
-                (window as any)._totalTime_ += payload.loadTime;
+            if ((window as any)._nodeLoaderStats_ != undefined && payload.loadTime !== 0) {
+                (window as any)._nodeLoaderStats_.totalParseTime += payload.loadTime;
+                (window as any)._nodeLoaderStats_.lastTimeLog = performance.now();
             }
             const { childInfos, geometry } = payload;
             for (const data of childInfos) {

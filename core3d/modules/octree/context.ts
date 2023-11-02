@@ -5,7 +5,7 @@ import { NodeState, type OctreeContext, OctreeNode, Visibility, NodeGeometryKind
 import { glClear, glDelete, glDraw, glState, glTransformFeedback, glUpdateTexture } from "webgl2";
 import { getMultiDrawParams, MaterialType } from "./mesh";
 import { type ReadonlyVec3, vec3, vec4, type ReadonlyVec4 } from "gl-matrix";
-import type { NodeLoader } from "./loader";
+import type { NodeLoader, NodeLoaderStats } from "./loader";
 import { computeGradientColors, gradientRange } from "./gradient";
 // import { BufferFlags } from "@novorender/core3d/buffers";
 import { OctreeModule, Gradient, type Resources, type Uniforms, ShaderMode, ShaderPass } from "./module";
@@ -16,7 +16,6 @@ import { esbuildWasmInstance, type WasmInstance } from "./worker/wasm_loader";
 import { Arena } from "@novorender/wasm-parser";
 
 const enum UBO { camera, clipping, scene, node };
-const use_wasm_intersections = false;
 
 export interface RenderNode {
     readonly mask: number;
@@ -61,9 +60,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
             indices: new Uint8Array(buffer, 4),
             mutex: new Mutex(buffer),
         } as const;
-        if(use_wasm_intersections) {
-            this.setWasm(renderContext);
-        }
+        this.setWasm(renderContext);
     }
 
     get highlights() {
@@ -467,7 +464,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
 
                 const renderNodes = this.getRenderNodes(this.projectedSizeSplitThreshold / state.quality.detail, this.rootNodes[NodeGeometryKind.triangles]);
 
-                const useNewOutlines = false;
+                const useWasmIntersections = false;
                 if (useNewOutlines) {
                     const begin = performance.now();
                     const { outlineRenderers } = this;
@@ -487,7 +484,12 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
                     }
 
                     const end = performance.now();
-                    console.log(`lines: ${lineCount} time:${end - begin}`);
+                    if((window as any)._nodeLoaderStats_ !== undefined) {
+                        const nodeLoaderStats: NodeLoaderStats = (window as any)._nodeLoaderStats_;
+                        nodeLoaderStats.totalOutlinesTime += end - begin;
+                        nodeLoaderStats.lastTimeLog = end;
+                        nodeLoaderStats.wasmIntersections = useWasmIntersections;
+                    }
                 } else {
                     // render clipping outlines
                     glState(gl, {

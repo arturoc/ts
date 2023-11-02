@@ -8,6 +8,7 @@ import { downloadOfflineImports, manageOfflineStorage, type OfflineImportMap, ty
 import { loadSceneDataOffline, type DataContext } from "data";
 import * as DataAPI from "data/api";
 import { OfflineFileNotFoundError, hasOfflineDir, requestOfflineFile } from "offline/file";
+import type { NodeLoaderStats } from "core3d/modules/octree/loader";
 
 /**
  * A view base class for Novorender content.
@@ -279,7 +280,7 @@ export class View<
     * @remarks
     * The url typically contains the scene id as the latter part of the path, i.e. `https://.../<scene_guid>/`.
     */
-    async loadScene(baseUrl: URL, sceneId: string, version: string, abortSignal?: AbortSignal): Promise<SceneConfig> {
+    async loadScene(baseUrl: URL, sceneId: string, version: string, abortSignal?: AbortSignal, useWasmParser = false): Promise<SceneConfig> {
         const baseSceneUrl = new URL(baseUrl);
         baseSceneUrl.pathname += `${sceneId}/`;
         function relativeUrl(path: string) {
@@ -302,7 +303,7 @@ export class View<
             const { render, measure, data, offline } = index;
 
 
-            const scene = await downloadScene(baseSceneUrl, render.webgl2, abortSignal);
+            const scene = await downloadScene(baseSceneUrl, render.webgl2, abortSignal, useWasmParser);
             const stateChanges = { scene };
             flipState(stateChanges, "GLToCAD");
             this.modifyRenderState(stateChanges);
@@ -569,13 +570,14 @@ export class View<
                 this.modifyRenderState(cameraChanges);
             }
 
-            if((window as any)._startDownload_ !== undefined) {
-                const elapsed = performance.now() - (window as any)._startDownload_;
-                if(elapsed > 6000 && (window as any)._lastTimeLog_ != (window as any)._totalTime_){
-                    const wasmParser = _renderContext?.currentState?.scene?.useWasmParser ?? false;
-                    console.log(`${wasmParser ? "Wasm parser" : "Js parser"} time: ${(window as any)._totalTime_}`);
-                    console.log(`render outlines time: ${(window as any)._totalRenderOutlinesTime_}`);
-                    (window as any)._lastTimeLog_ = (window as any)._totalTime_;
+            if((window as any)._nodeLoaderStats_ !== undefined) {
+                const nodeLoaderStats: NodeLoaderStats = (window as any)._nodeLoaderStats_;
+                const elapsed = performance.now() - nodeLoaderStats.start;
+                const wasmParser = _renderContext?.currentState?.scene?.useWasmParser ?? false;
+                if(elapsed > 6000 && nodeLoaderStats.lastTimeLog != nodeLoaderStats.prevTimeLog && nodeLoaderStats.wasmParser == wasmParser){
+                    console.log(`${wasmParser ? "Wasm parser" : "Js parser"} time: ${nodeLoaderStats.totalParseTime}`);
+                    console.log(`${nodeLoaderStats.wasmOutlines ? "Wasm outlines" : "Js outlines"} render outlines time: ${nodeLoaderStats.totalOutlinesTime}`);
+                    nodeLoaderStats.prevTimeLog = nodeLoaderStats.lastTimeLog;
                 }
             }
 

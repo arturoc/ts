@@ -4,6 +4,19 @@ import type { DeviceProfile } from "core3d/device.js";
 
 interface PayloadPromiseMethods { readonly resolve: (value: NodePayload | undefined) => void, readonly reject: (reason: string) => void };
 
+export class NodeLoaderStats {
+    start: number;
+    lastTimeLog: number | undefined;
+    prevTimeLog: number | undefined;
+    totalParseTime: number = 0;
+    totalOutlinesTime: number = 0;
+    wasmIntersections: boolean = false;
+    wasmParser: boolean = false;
+    constructor() {
+        this.start = performance.now()
+    }
+}
+
 /** @internal */
 export class NodeLoader {
     readonly payloadPromises = new Map<string, PayloadPromiseMethods>();
