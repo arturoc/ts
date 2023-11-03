@@ -573,9 +573,8 @@ export class View<
             if((window as any)._nodeLoaderStats_ !== undefined) {
                 const nodeLoaderStats: NodeLoaderStats = (window as any)._nodeLoaderStats_;
                 const elapsed = performance.now() - nodeLoaderStats.start;
-                const wasmParser = _renderContext?.currentState?.scene?.useWasmParser ?? false;
-                if(elapsed > 6000 && nodeLoaderStats.lastTimeLog != nodeLoaderStats.prevTimeLog && nodeLoaderStats.wasmParser == wasmParser){
-                    console.log(`${wasmParser ? "Wasm parser" : "Js parser"} time: ${nodeLoaderStats.totalParseTime}`);
+                if(elapsed > 6000 && nodeLoaderStats.lastTimeLog != nodeLoaderStats.prevTimeLog) {
+                    console.log(`${nodeLoaderStats.wasmParser ? "Wasm parser" : "Js parser"} time: ${nodeLoaderStats.totalParseTime}`);
                     console.log(`${nodeLoaderStats.wasmIntersections ? "Wasm outlines" : "Js outlines"} render outlines time: ${nodeLoaderStats.totalOutlinesTime}`);
                     nodeLoaderStats.prevTimeLog = nodeLoaderStats.lastTimeLog;
                 }

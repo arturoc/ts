@@ -464,7 +464,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
 
                 const renderNodes = this.getRenderNodes(this.projectedSizeSplitThreshold / state.quality.detail, this.rootNodes[NodeGeometryKind.triangles]);
 
-                const useNewOutlines = false;
+                const useNewOutlines = true;
                 const useWasmIntersections = false;
                 if (useNewOutlines) {
                     const begin = performance.now();
@@ -475,7 +475,9 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
                         outlineRenderers.set(plane, outlineRenderer);
                     }
                     let lineCount = 0;
-                    const [...lineClusters] = outlineRenderer.intersectTriangles(this.wasm, this.arena, renderNodes);
+                    const wasm = useWasmIntersections ? this.wasm : undefined;
+                    const arena = useWasmIntersections ? this.arena : undefined;
+                    const [...lineClusters] = outlineRenderer.intersectTriangles(wasm, arena, renderNodes);
                     {
                         const { count, vao } = outlineRenderer.makeLinesVAO(lineClusters);
                         lineCount = count;
