@@ -464,6 +464,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
 
                 const renderNodes = this.getRenderNodes(this.projectedSizeSplitThreshold / state.quality.detail, this.rootNodes[NodeGeometryKind.triangles]);
 
+                const useNewOutlines = false;
                 const useWasmIntersections = false;
                 if (useNewOutlines) {
                     const begin = performance.now();
