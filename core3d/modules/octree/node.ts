@@ -336,6 +336,7 @@ export class OctreeNode {
             if ((window as any)._nodeLoaderStats_ != undefined && payload.loadTime !== 0) {
                 (window as any)._nodeLoaderStats_.totalParseTime += payload.loadTime;
                 (window as any)._nodeLoaderStats_.lastTimeLog = performance.now();
+                (window as any)._nodeLoaderStats_.wasmParser = payload.mode == Mode.Wasm
             }
             const { childInfos, geometry } = payload;
             for (const data of childInfos) {
