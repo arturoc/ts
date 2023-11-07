@@ -1,4 +1,4 @@
-import { type NodeData, type NodeGeometry } from "./parser";
+import { Mode, type NodeData, type NodeGeometry } from "./parser";
 
 // request messages (main->worker)
 
