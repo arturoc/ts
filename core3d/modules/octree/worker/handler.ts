@@ -10,6 +10,9 @@ export interface HighlightsBuffer {
     readonly indices: Uint8Array;
     readonly mutex: Mutex;
 }
+
+const mode = Mode.Wasm as Mode;
+
 /** @internal */
 export class LoaderHandler {
     readonly downloader = new Downloader();
@@ -47,9 +50,10 @@ export class LoaderHandler {
     private async init(msg: InitMessage) {
         const {wasmData, buffer} = msg;
 
-        this.wasm = await esbuildWasmInstance(wasmData);
-        this.wasmArena = new Arena();
-
+        if(mode != Mode.Js) {
+            this.wasm = await esbuildWasmInstance(wasmData);
+            this.wasmArena = new Arena;
+        }
 
         const indices = new Uint8Array(buffer, 4);
         const mutex = new Mutex(buffer);
@@ -59,12 +63,11 @@ export class LoaderHandler {
     }
 
     private parseBuffer(buffer: ArrayBuffer, params: ParseParams) {
-        if(this.wasm && this.wasmArena) {
-            const { highlights } = this;
+        if(this.wasm || mode == Mode.Js) {
+            const { highlights, wasmArena } = this;
             const { id, version, separatePositionsBuffer, enableOutlines, applyFilter } = params;
             const loadStart = performance.now();
-            const { childInfos, geometry } = parseNode(this.wasm, this.wasmArena.clone(), id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter, params.useWasmParser ? Mode.Wasm : Mode.Js);
-            const readyMsg: ReadyMessage = { kind: "ready", id, childInfos, geometry, loadTime: performance.now() - loadStart };
+            const { childInfos, geometry } = parseNode(this.wasm, wasmArena?.clone(), id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter, mode);
             const transfer: Transferable[] = [];
             for (const { vertexBuffers, indices } of geometry.subMeshes) {
                 transfer.push(...vertexBuffers);
@@ -72,6 +75,7 @@ export class LoaderHandler {
                     transfer.push(indices.buffer);
                 }
             }
+            const readyMsg: ReadyMessage = { kind: "ready", id, childInfos, geometry, loadTime: performance.now() - loadStart, mode };
             this.send(readyMsg, transfer);
         }else{
             console.error("Wasm is not initialized yet");

@@ -1,6 +1,6 @@
 import { LoaderHandler } from "./handler";
 import type { MessageResponse, MessageRequest } from "./messages";
-export type * from "./parser";
+export * from "./parser";
 export type * from "./messages";
 
 

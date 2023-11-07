@@ -2,7 +2,7 @@ import { mat4, type ReadonlyVec3, type ReadonlyVec4, vec3, vec4 } from "gl-matri
 import { glUBOProxy, glUpdateBuffer } from "webgl2";
 import { CoordSpace, type DerivedRenderState, RenderContext, type RenderStateHighlightGroup } from "core3d";
 import { createMeshes, deleteMesh, type Mesh, meshPrimitiveCount, updateMeshHighlights } from "./mesh";
-import type { NodeData } from "./worker";
+import { Mode, type NodeData } from "./worker";
 import { NodeLoader } from "./loader";
 import { ResourceBin } from "core3d/resource";
 

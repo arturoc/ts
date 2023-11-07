@@ -65,6 +65,7 @@ export interface NodePayload {
     readonly childInfos: readonly NodeData[];
     readonly geometry: NodeGeometry;
     readonly loadTime: number,
+    readonly mode: Mode,
 }
 
 /** @internal */

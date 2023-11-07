@@ -769,35 +769,40 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
             highlightTri: vertexAttributeToJS(vertexAttributesWasm.highlight_tri),
         };
         vertexAttributesWasm.free();
+        let objectRangesBuffer = subMesh.objectRanges;
+        let objectRanges = new Array(objectRangesBuffer.length / 5);
+        for(let i = 0; i<objectRanges.length; i++) {
+            objectRanges[i] = {
+                objectId: objectRangesBuffer[i * 5 + 0],
+                beginVertex: objectRangesBuffer[i * 5 + 1],
+                endVertex: objectRangesBuffer[i * 5 + 2],
+                beginTriangle: objectRangesBuffer[i * 5 + 3],
+                endTriangle: objectRangesBuffer[i * 5 + 4],
+            }
+        }
+
+        let drawRangesBuffer = subMesh.drawRanges;
+        let drawRanges = new Array(drawRangesBuffer.length / 4);
+        for(let i = 0; i<drawRanges.length; i++) {
+            drawRanges[i] = {
+                childIndex: drawRangesBuffer[i * 4 + 0],
+                byteOffset: drawRangesBuffer[i * 4 + 1],
+                first: drawRangesBuffer[i * 4 + 2],
+                count: drawRangesBuffer[i * 4 + 3],
+            }
+        }
 
         let subMeshJs = {
             materialType: subMesh.materialType,
             primitiveType: subMesh.primitiveType,
             numVertices: subMesh.numVertices,
             numTriangles: subMesh.numTriangles,
-            objectRanges: subMesh.objectRanges.map(range => {
-                const ret = {
-                    objectId: range.objectId,
-                    beginVertex: range.beginVertex,
-                    endVertex: range.endVertex,
-                    beginTriangle: range.beginTriangle,
-                    endTriangle: range.endTriangle
-                };
-                return ret;
-            }),
+            objectRanges,
             vertexAttributes: vertexAtributesJs,
-            vertexBuffers: subMesh.vertexBuffers,
+            vertexBuffers: vertexBuffers.map((buffer) => (buffer.buffer)),
             indices: subMesh.indices,
             baseColorTexture: subMesh.baseColorTexture,
-            drawRanges: subMesh.drawRanges.map(range => {
-                const rangeJs = {
-                    childIndex: range.childIndex,
-                    byteOffset: range.byteOffset,
-                    first: range.first,
-                    count: range.count
-                };
-                return rangeJs;
-            }),
+            drawRanges,
         };
 
         return subMeshJs;
@@ -829,7 +834,7 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
                 }
             };
 
-            let mipMaps = texture.params.mipMaps?.map((image) => image.slice());
+            let mipMaps = texture.params.mipMaps;
             if (mipMaps !== undefined) {
                 (textureJs as any).mipMaps = mipMaps;
             }
@@ -867,18 +872,18 @@ export const enum Mode {
 }
 
 // Temporary function to test both JS and wasm versions
-export function parseNode(wasm: WasmInstance, wasmArena: Arena, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean, mode = Mode.Js) {
+export function parseNode(wasm: WasmInstance | undefined, wasmArena: Arena | undefined, id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean, mode = Mode.Js) {
     // Test wasm implementation
     switch (mode) {
         case Mode.Wasm:
-            return parseNodeWasm(wasm, wasmArena, id, enableOutlines, version, buffer, highlights, applyFilter);
+            return parseNodeWasm(wasm!, wasmArena!, id, enableOutlines, version, buffer, highlights, applyFilter);
         case Mode.Js:
             return parseNodeJs(id, separatePositionBuffer, enableOutlines, version, buffer, highlights, applyFilter);
         case Mode.ComparePerformance:
             let childInfosWasm;
             let geometryWasm;
             {
-                const {childInfos, geometry} = parseNodeWasm(wasm, wasmArena, id, enableOutlines, version, buffer, highlights, applyFilter);
+                const {childInfos, geometry} = parseNodeWasm(wasm!, wasmArena!, id, enableOutlines, version, buffer, highlights, applyFilter);
                 childInfosWasm = childInfos;
                 geometryWasm = geometry;
             }
