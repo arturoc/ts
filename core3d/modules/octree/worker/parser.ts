@@ -117,6 +117,24 @@ export const enum VertexAttribIndex {
     triangles, position, normal, material, objectId, texCoord, color, projectedPos, deviations, highlight, highlightTri
 };
 
+export interface SubBufferU8 {
+    readonly kind: "u8";
+    readonly byteOffset: number;
+    readonly length: number;
+};
+
+export interface SubBufferU16 {
+    readonly kind: "u16";
+    readonly byteOffset: number;
+    readonly length: number;
+};
+
+export interface SubBufferU32 {
+    readonly kind: "u32";
+    readonly byteOffset: number;
+    readonly length: number;
+};
+
 /** @internal */
 export interface NodeSubMesh {
     readonly materialType: MaterialType;
@@ -127,9 +145,10 @@ export interface NodeSubMesh {
     readonly objectRanges: readonly MeshObjectRange[];
     // either index range (if index buffer is defined) for use with drawElements(), or vertex range for use with drawArray()
     readonly drawRanges: readonly MeshDrawRange[];
-    readonly vertexBuffers: readonly ArrayBuffer[];
-    readonly indices: Uint16Array | Uint32Array | number; // Index buffer, or # vertices of none
+    readonly vertexBuffers: Array<SubBufferU8 | ArrayBuffer>;
+    readonly indices: SubBufferU16 | SubBufferU32 | Uint16Array | Uint32Array | number; // Index buffer, or # vertices of none
     readonly baseColorTexture?: number; // texture index
+    readonly buffer: SharedArrayBuffer | ArrayBuffer | undefined;
 }
 
 /** @internal */
@@ -640,7 +659,8 @@ function getGeometry(schema: Schema, separatePositionBuffer: boolean, enableOutl
             vertexBuffers,
             indices,
             baseColorTexture,
-            drawRanges
+            drawRanges,
+            buffer: undefined
         });
     }
 
@@ -676,7 +696,16 @@ function getGeometry(schema: Schema, separatePositionBuffer: boolean, enableOutl
 export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
     const data = new Uint8Array(buffer, 0);
 
+    // performance.mark("start readSchema wasm");
     const schema = version == Current.version ? wasm.Schema.parse_2_1(data, wasmArena) : wasm.Schema.parse_2_0(data, wasmArena) ;
+    // performance.mark("end readSchema wasm");
+    // performance.measure(
+    //     "readSchema wasm",
+    //     "start readSchema wasm",
+    //     "end readSchema wasm"
+    // );
+
+    // performance.mark("start getChildren wasm");
     const childInfos = schema.children().map(value => {
         let childInfo = {
             id: value.id(),
@@ -725,6 +754,15 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
         return childInfo;
     });
 
+    // performance.mark("end getChildren wasm");
+    // performance.measure(
+    //     "getChildren wasm",
+    //     "start getChildren wasm",
+    //     "end getChildren wasm"
+    // );
+
+
+    // performance.mark("start getGeometry wasm " + id);
     highlights.mutex.lockSync();
     let highlightsWasm = schema.create_highlights(highlights.indices);
     highlights.mutex.unlock();
@@ -769,6 +807,24 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
             highlightTri: vertexAttributeToJS(vertexAttributesWasm.highlight_tri),
         };
         vertexAttributesWasm.free();
+        const indices = subMesh.indices;
+        let indicesSub: SubBufferU16 | SubBufferU32 | number;
+        let vertices_kind: "u8" = "u8";
+        if(indices instanceof Uint16Array) {
+            indicesSub = {
+                kind: "u16",
+                byteOffset: indices.byteOffset,
+                length: indices.length
+            }
+        }else if (indices instanceof Uint32Array) {
+            indicesSub = {
+                kind: "u32",
+                byteOffset: indices.byteOffset,
+                length: indices.length
+            }
+        }else{
+            indicesSub = indices
+        }
         let objectRangesBuffer = subMesh.objectRanges;
         let objectRanges = new Array(objectRangesBuffer.length / 5);
         for(let i = 0; i<objectRanges.length; i++) {
@@ -792,6 +848,9 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
             }
         }
 
+        const vertexBuffers = subMesh.vertexBuffers;
+        const subMeshBuffer = vertexBuffers[0].buffer;
+
         let subMeshJs = {
             materialType: subMesh.materialType,
             primitiveType: subMesh.primitiveType,
@@ -799,10 +858,21 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
             numTriangles: subMesh.numTriangles,
             objectRanges,
             vertexAttributes: vertexAtributesJs,
-            vertexBuffers: subMesh.vertexBuffers.map((buffer) => (buffer.buffer)),
-            indices: subMesh.indices,
+            vertexBuffers: subMesh.vertexBuffers.map((buffer) => {
+                if(buffer.buffer == subMeshBuffer) {
+                    return {
+                        kind: vertices_kind,
+                        byteOffset: buffer.byteOffset,
+                        length: buffer.length
+                    };
+                }else{
+                    return buffer.buffer
+                }
+            }),
+            indices: indicesSub,
             baseColorTexture: subMesh.baseColorTexture,
             drawRanges,
+            buffer: subMeshBuffer,
         };
 
         return subMeshJs;
@@ -846,7 +916,14 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
     });
     const geometry = {subMeshes: jsSubMeshes, textures: jsTextures};
 
-    schema.free();
+    // performance.mark("end getGeometry wasm " + id);
+    // performance.measure(
+    //     "getGeometry wasm " + id,
+    //     "start getGeometry wasm " + id,
+    //     "end getGeometry wasm " + id,
+    // );
+
+    // schema.free();
 
     return { childInfos, geometry } as const;
 }
@@ -855,13 +932,38 @@ export function parseNodeWasm(wasm: WasmInstance, wasmArena: Arena, id: string, 
 export function parseNodeJs(id: string, separatePositionBuffer: boolean, enableOutlines: boolean, version: string, buffer: ArrayBuffer, highlights: Highlights, applyFilter: boolean) {
     console.assert(isSupportedVersion(version));
     const r = new BufferReader(buffer);
+
+    // performance.mark("start readSchema js");
     var schema = version == Current.version ? Current.readSchema(r) : Previous.readSchema(r);
+    // performance.mark("end readSchema js");
+    // performance.measure(
+    //     "readSchema js",
+    //     "start readSchema js",
+    //     "end readSchema js"
+    // );
+
     let predicate: ((objectId: number) => boolean) | undefined;
     predicate = applyFilter ? (objectId =>
         highlights.indices[objectId] != 0xff
     ) : undefined;
+
+    // performance.mark("start getChildren js");
     const childInfos = getChildren(id, schema, separatePositionBuffer, predicate);
+    // performance.mark("end getChildren js");
+    // performance.measure(
+    //     "getChildren js",
+    //     "start getChildren js",
+    //     "end getChildren js"
+    // );
+
+    // performance.mark("start getGeometry js " + id);
     const geometry = getGeometry(schema, separatePositionBuffer, enableOutlines, highlights, predicate);
+    // performance.mark("end getGeometry js " + id);
+    // performance.measure(
+    //     "getGeometry js " + id,
+    //     "start getGeometry js " + id,
+    //     "end getGeometry js " + id,
+    // );
     return { childInfos, geometry } as const;
 }
 

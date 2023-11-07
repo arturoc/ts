@@ -58,6 +58,11 @@ export interface CloseMessage {
     readonly kind: "close";
 }
 
+export interface FreeMessage {
+    readonly kind: "free";
+    readonly id: string;
+}
+
 // response messages (worker->main)
 
 /** @internal */
@@ -88,6 +93,6 @@ export interface ErrorMessage {
 }
 
 /** @internal */
-export type MessageRequest = InitMessage | ParseMessage | LoadMessage | AbortMessage | AbortAllMessage | CloseMessage;
+export type MessageRequest = InitMessage | ParseMessage | LoadMessage | AbortMessage | AbortAllMessage | CloseMessage | FreeMessage;
 /** @internal */
 export type MessageResponse = ReadyMessage | AbortedMessage | AbortedAllMessage | ErrorMessage | BufferSet;

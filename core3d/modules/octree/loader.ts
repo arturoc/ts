@@ -130,4 +130,9 @@ export class NodeLoader {
             payloadPromises.set(id, { resolve, reject });
         });
     }
+
+    freeNode(node: OctreeNode) {
+        let { id } = node;
+        this.send({ kind: "free", id })
+    }
 }

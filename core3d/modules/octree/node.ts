@@ -355,6 +355,7 @@ export class OctreeNode {
         } else {
             this.state = NodeState.collapsed;
         }
+        loader.freeNode(this);
     }
 
     getModelLocalMatrix(localSpaceTranslation: ReadonlyVec3) {

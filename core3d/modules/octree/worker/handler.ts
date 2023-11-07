@@ -1,7 +1,7 @@
 import { AbortableDownload, Downloader } from "./download";
 import { Mutex } from "../mutex";
 import { Mode, parseNode } from "./parser";
-import type { AbortAllMessage, AbortMessage, AbortedAllMessage, AbortedMessage, ParseMessage, ErrorMessage, LoadMessage, ReadyMessage, MessageRequest, MessageResponse, ParseParams, BufferSet, InitMessage } from "./messages";
+import type { AbortAllMessage, AbortMessage, AbortedAllMessage, AbortedMessage, ParseMessage, ErrorMessage, LoadMessage, ReadyMessage, MessageRequest, MessageResponse, ParseParams, BufferSet, InitMessage, FreeMessage } from "./messages";
 import { esbuildWasmInstance, type WasmInstance } from "./wasm_loader";
 import { Arena } from "@novorender/wasm-parser";
 
@@ -19,7 +19,8 @@ export class LoaderHandler {
     readonly downloads = new Map<string, AbortableDownload>();
     highlights: HighlightsBuffer = undefined!; // will be set right after construction by "buffer" message
     wasm: WasmInstance | undefined;
-    wasmArena: Arena | undefined;
+    arenasInUse = new Map<string, Arena>();
+    freeArenas = new Array<Arena>();
 
     constructor(readonly send: (msg: MessageResponse, transfer?: Transferable[]) => void) {
     }
@@ -41,6 +42,9 @@ export class LoaderHandler {
             case "abort_all":
                 this.abortAll(msg);
                 break;
+            case "free":
+                this.freeArena(msg);
+                break;
             // default:
             //     console.warn(`Unknown load message: ${msg}!`);
             //     break;
@@ -52,7 +56,9 @@ export class LoaderHandler {
 
         if(mode != Mode.Js) {
             this.wasm = await esbuildWasmInstance(wasmData);
-            this.wasmArena = new Arena;
+            for (let i = 0; i<10; i++) {
+                this.freeArenas.push(new Arena);
+            }
         }
 
         const indices = new Uint8Array(buffer, 4);
@@ -64,21 +70,39 @@ export class LoaderHandler {
 
     private parseBuffer(buffer: ArrayBuffer, params: ParseParams) {
         if(this.wasm || mode == Mode.Js) {
-            const { highlights, wasmArena } = this;
+            const { highlights, freeArenas, arenasInUse } = this;
             const { id, version, separatePositionsBuffer, enableOutlines, applyFilter } = params;
             const loadStart = performance.now();
+            let wasmArena;
+            if(mode != Mode.Js) {
+                wasmArena = freeArenas.pop() ?? new Arena();
+            }
             const { childInfos, geometry } = parseNode(this.wasm, wasmArena?.clone(), id, separatePositionsBuffer, enableOutlines, version, buffer, highlights, applyFilter, mode);
             const transfer: Transferable[] = [];
-            for (const { vertexBuffers, indices } of geometry.subMeshes) {
-                transfer.push(...vertexBuffers);
-                if (typeof indices != "number") {
-                    transfer.push(indices.buffer);
+            if(mode == Mode.Js) {
+                for (const { vertexBuffers, indices } of geometry.subMeshes) {
+                    transfer.push(...vertexBuffers as any);
+                    if (typeof indices != "number") {
+                        transfer.push((indices as any).buffer);
+                    }
                 }
+            }
+            if(wasmArena !== undefined) {
+                arenasInUse.set(id, wasmArena);
             }
             const readyMsg: ReadyMessage = { kind: "ready", id, childInfos, geometry, loadTime: performance.now() - loadStart, mode };
             this.send(readyMsg, transfer);
         }else{
             console.error("Wasm is not initialized yet");
+        }
+    }
+
+    private freeArena(msg: FreeMessage) {
+        const arena = this.arenasInUse.get(msg.id);
+        if(arena) {
+            this.arenasInUse.delete(msg.id);
+            arena.reset();
+            this.freeArenas.push(arena);
         }
     }
 

@@ -52,13 +52,28 @@ export function* createMeshes(resourceBin: ResourceBin, geometry: NodeGeometry) 
     for (const subMesh of geometry.subMeshes) {
         // if (subMesh.materialType == MaterialType.transparent)
         //     continue;
-        const { vertexAttributes, vertexBuffers, indices, numVertices, numTriangles, drawRanges, objectRanges, materialType } = subMesh;
+        const { vertexAttributes, vertexBuffers, indices, numVertices, numTriangles, drawRanges, objectRanges, materialType, buffer } = subMesh;
         const buffers = vertexBuffers.map(vb => {
-            return resourceBin.createBuffer({ kind: "ARRAY_BUFFER", srcData: vb });
+            if (vb instanceof ArrayBuffer) {
+                return resourceBin.createBuffer({ kind: "ARRAY_BUFFER", srcData: vb });
+            }else{
+                const vertexBuffer = new Uint8Array(buffer!, vb.byteOffset, vb.length);
+                return resourceBin.createBuffer({ kind: "ARRAY_BUFFER", srcData: vertexBuffer });
+            }
         })
-        const ib = typeof indices != "number" ? resourceBin.createBuffer({ kind: "ELEMENT_ARRAY_BUFFER", srcData: indices }) : undefined;
+        let indexBuffer = undefined;
+        if(indices instanceof Uint16Array || indices instanceof Uint32Array) {
+            indexBuffer = indices;
+        }else if(typeof(indices) != "number") {
+            if(buffer && indices.kind == "u16") {
+                indexBuffer = new Uint16Array(buffer, indices.byteOffset, indices.length);
+            }else if(buffer && indices.kind == "u32") {
+                indexBuffer = new Uint32Array(buffer, indices.byteOffset, indices.length);
+            }
+        }
+        const ib = indexBuffer ? resourceBin.createBuffer({ kind: "ELEMENT_ARRAY_BUFFER", srcData: indexBuffer }) : undefined;
         const count = typeof indices == "number" ? indices : indices.length;
-        const indexType = indices instanceof Uint16Array ? "UNSIGNED_SHORT" : "UNSIGNED_INT";
+        const indexType = indexBuffer instanceof Uint16Array ? "UNSIGNED_SHORT" : "UNSIGNED_INT";
         const { triangles0, triangles1, triangles2, trianglesObjId, position, normal, material, objectId, texCoord, color, projectedPos, deviations, highlight, highlightTri } = convertAttributes(vertexAttributes, buffers);
         const triangleAttributes = [triangles0, triangles1, triangles2, trianglesObjId, highlightTri];
         const renderAttributes = [position, normal, material, objectId, texCoord, color, projectedPos, deviations, highlight];
