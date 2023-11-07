@@ -747,7 +747,7 @@ export class OctreeModuleContext implements RenderModuleContext, OctreeContext {
 
     private async setWasm(renderContext: RenderContext) {
         this.wasm = await esbuildWasmInstance(renderContext.imports.parserWasm);
-        this.arena = new Arena;
+        this.arena = Arena.with_capacity(1024 * 1024);
     }
 }
 
